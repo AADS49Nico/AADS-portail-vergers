@@ -188,10 +188,17 @@ async function sbFetch(path, method, body, extraHeaders) {
   return res.json().catch(() => true); // succes, corps non-JSON ou vide -> true plutot que null
 }
 async function sbGet(table) {
-  return sbFetch(table + "?contrat=eq." + CLIENT_CONFIG.contrat + "&order=id.asc", "GET");
+  const siteFilter = CLIENT_CONFIG.site ? "&site=eq." + encodeURIComponent(CLIENT_CONFIG.site) : "";
+  const siteableTables = ["postes","passages","plans","plans_dessines","plan_actions","audits","poste_positions"];
+  const useSite = siteableTables.includes(table) && CLIENT_CONFIG.site;
+  return sbFetch(table + "?contrat=eq." + CLIENT_CONFIG.contrat + (useSite ? siteFilter : "") + "&order=id.asc", "GET");
 }
 async function sbUpsert(table, data) {
-  return sbFetch(table, "POST", data, { Prefer: "resolution=merge-duplicates,return=representation" });
+  const siteableTables = ["postes","passages","plans","plans_dessines","plan_actions","audits","poste_positions"];
+  const dataWithSite = siteableTables.includes(table) && CLIENT_CONFIG.site && !data.site
+    ? { ...data, site: CLIENT_CONFIG.site }
+    : data;
+  return sbFetch(table, "POST", dataWithSite, { Prefer: "resolution=merge-duplicates,return=representation" });
 }
 async function sbUpdate(table, id, data) {
   return sbFetch(table + "?id=eq." + id + "&contrat=eq." + CLIENT_CONFIG.contrat, "PATCH", data, { Prefer: "return=representation" });
@@ -10116,6 +10123,14 @@ function GestionPostes({ postes, setPostes }) {
             Export Excel
           </button>
           <button onClick={()=>setShowAdd(v=>!v)} style={{background:"#1d4ed8",color:"#fff",border:"none",borderRadius:8,padding:"7px 14px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>+ Ajouter poste</button>
+          <button onClick={()=>{
+            if(!window.confirm("Supprimer TOUS les postes ? Cette action est irréversible.")) return;
+            setPrevPostes(postes);
+            postes.forEach(p=>sbDelete("postes",p.id));
+            setPostes([]);
+          }} style={{background:"#ef444411",color:"#ef4444",border:"1px solid #ef444433",borderRadius:8,padding:"7px 14px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+            🗑 Supprimer tous les postes
+          </button>
         </div>
       </div>
       {showManageLists && (
