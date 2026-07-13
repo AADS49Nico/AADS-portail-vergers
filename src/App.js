@@ -133,11 +133,11 @@ function NetworkIndicator({ pendingCount, onSync }) {
 // ============================================================
 // PLAN_IMG retire - les plans sont maintenant geres dynamiquement via Supabase (table 'plans'), sans plan par defaut au demarrage
 let BANNER_IMG = "https://oywowtpnuffvvgjffjsc.supabase.co/storage/v1/object/sign/Image/LOGO%20AADS.png?token=eyJraWQiOiJzdG9yYWdlLXVybC1zaWduaW5nLWtleV80NTM5NGZiOS0yYmFiLTQxNWUtYWZkMS1kNjA4ZjUyMGM3ZTkiLCJhbGciOiJIUzI1NiJ9.eyJ1cmwiOiJJbWFnZS9MT0dPIEFBRFMucG5nIiwic2NvcGUiOiJkb3dubG9hZCIsImlhdCI6MTc4MzI2NTA5MSwiZXhwIjoyNDEzOTg1MDkxfQ.STpSBByeLsyFj5jFhI1voCvJxMWOunqgf7Eb7Z1UZfA";
-let TOQUE_LOGO = "https://oywowtpnuffvvgjffjsc.supabase.co/storage/v1/object/sign/Image/LA%20TOQUE.png?token=eyJraWQiOiJzdG9yYWdlLXVybC1zaWduaW5nLWtleV80NTM5NGZiOS0yYmFiLTQxNWUtYWZkMS1kNjA4ZjUyMGM3ZTkiLCJhbGciOiJIUzI1NiJ9.eyJ1cmwiOiJJbWFnZS9MQSBUT1FVRS5wbmciLCJzY29wZSI6ImRvd25sb2FkIiwiaWF0IjoxNzgxMzQzMDMxLCJleHAiOjE4MTI4NzkwMzF9.cqEUF7J0y82gqyVVOJtoIe566WIqYAj2b90L5a80jhM";
+let TOQUE_LOGO = "";
 
 const CLIENT_CONFIG = {
-  nom: "",
-  contrat: "",
+  nom: "Les Vergers d'Anjou",
+  contrat: "000903",
   site: "",
   type_site: "",
   date_debut: "",
@@ -146,6 +146,10 @@ const CLIENT_CONFIG = {
   seuil_vigilance: 5,
   seuil_critique: 10,
 };
+
+
+const SITES_VERGERS = ["DURTAL", "ECOUFLANT", "ST BARTHELEMY D'ANJOU", "ST SYLVAIN D'ANJOU", "VARENNES SUR LOIRE"];
+const CONTRAT_VERGERS = "000903";
 
 let AADS_CONFIG = {
   adresse: "135 Le Breuil, 49125 Tierce",
@@ -12215,16 +12219,28 @@ function Audit({ seuilsGlobaux }) {
                 </div>
                 <div>
                   <label style={{fontSize:9,color:"#7a90aa",fontWeight:600,textTransform:"uppercase",display:"block",marginBottom:4}}>Photos ({(obs.photos||[]).length})</label>
-                  <label style={{background:"#243352",border:"1px dashed #3d5270",borderRadius:7,padding:"5px 12px",fontSize:10,color:"#7a90aa",cursor:"pointer"}}>
-                    + Ajouter photos
-                    <input type="file" accept="image/*" capture="environment" multiple style={{display:"none"}} onChange={e=>{
-                      Array.from(e.target.files).forEach(file=>{
-                        const r=new FileReader();
-                        r.onload=ev=>setObsItems(prev=>prev.map(o=>o.id===obs.id?{...o,photos:[...(o.photos||[]),{url:ev.target.result,name:file.name}]}:o));
-                        r.readAsDataURL(file);
-                      });
-                    }}/>
-                  </label>
+                  <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                    <label style={{background:"#243352",border:"1px dashed #3d5270",borderRadius:7,padding:"5px 12px",fontSize:10,color:"#7a90aa",cursor:"pointer"}}>
+                      📷 Photo
+                      <input type="file" accept="image/*" capture="environment" style={{display:"none"}} onChange={e=>{
+                        Array.from(e.target.files).forEach(file=>{
+                          const r=new FileReader();
+                          r.onload=ev=>setObsItems(prev=>prev.map(o=>o.id===obs.id?{...o,photos:[...(o.photos||[]),{url:ev.target.result,name:file.name}]}:o));
+                          r.readAsDataURL(file);
+                        });
+                      }}/>
+                    </label>
+                    <label style={{background:"#243352",border:"1px dashed #3d5270",borderRadius:7,padding:"5px 12px",fontSize:10,color:"#7a90aa",cursor:"pointer"}}>
+                      🖼 Galerie
+                      <input type="file" accept="image/*" multiple style={{display:"none"}} onChange={e=>{
+                        Array.from(e.target.files).forEach(file=>{
+                          const r=new FileReader();
+                          r.onload=ev=>setObsItems(prev=>prev.map(o=>o.id===obs.id?{...o,photos:[...(o.photos||[]),{url:ev.target.result,name:file.name}]}:o));
+                          r.readAsDataURL(file);
+                        });
+                      }}/>
+                    </label>
+                  </div>
                     {(obs.photos||[]).length>0&&(
                     <div style={{display:"flex",flexWrap:"wrap",gap:5,marginTop:6}}>
                       {(obs.photos||[]).map((ph,j)=>(
@@ -12855,6 +12871,20 @@ export default function App() {
 
 function AppPortail({ isAdmin, onLogout }) {
   window.__isAdmin = isAdmin;
+  const [activeSite, setActiveSite] = useState(() => {
+    try { return localStorage.getItem("aads_active_site") || SITES_VERGERS[0]; } catch(e) { return SITES_VERGERS[0]; }
+  });
+
+  function changeActiveSite(site) {
+    setActiveSite(site);
+    try { localStorage.setItem("aads_active_site", site); } catch(_e) { return; }
+    // Mettre à jour CLIENT_CONFIG.site
+    CLIENT_CONFIG.site = site;
+  }
+
+  // Initialiser le site au démarrage
+  useEffect(() => { CLIENT_CONFIG.site = activeSite; }, [activeSite]);
+
   const [page, setPage] = useState("dashboard");
   const [reinterventions, setReinterventions] = useState(REINIT_INIT);
   const [passagesGlobaux, setPassagesGlobaux] = useState([]);
@@ -13085,6 +13115,19 @@ function AppPortail({ isAdmin, onLogout }) {
               <div onClick={()=>setShowParametres(true)} style={{ fontSize: 10, color: CLIENT_CONFIG.nom?"#94a3b8":"#f59e0b", fontWeight: 600, flex:1, cursor:"pointer" }} title="Cliquer pour modifier les paramètres client">{CLIENT_CONFIG.nom ? "⚙ Paramètres" : "⚙ Configurer le client"}</div>
               <span style={{fontSize:9,fontWeight:700,background:isAdmin?"#1d4ed822":"#22c55e22",color:isAdmin?"#3b82f6":"#22c55e",border:"1px solid "+(isAdmin?"#3b82f644":"#22c55e44"),borderRadius:4,padding:"1px 6px"}}>{isAdmin?"Admin":"Client"}</span>
               <button onClick={onLogout} title="Se déconnecter" style={{background:"transparent",border:"1px solid #3d5270",borderRadius:6,color:"#7a90aa",fontSize:11,cursor:"pointer",padding:"2px 7px",fontFamily:"inherit"}}>⏻</button>
+            </div>
+          </div>
+
+          {/* SÉLECTEUR DE SITE */}
+          <div style={{padding:"8px 12px",borderBottom:"1px solid #24335244"}}>
+            <div style={{fontSize:9,color:"#7a90aa",fontWeight:600,textTransform:"uppercase",marginBottom:6}}>Site actif</div>
+            <div style={{display:"flex",flexDirection:"column",gap:3}}>
+              {SITES_VERGERS.map(site=>(
+                <button key={site} onClick={()=>changeActiveSite(site)}
+                  style={{background:activeSite===site?"#1d4ed8":"transparent",color:activeSite===site?"#fff":"#7a90aa",border:"1px solid "+(activeSite===site?"#3b82f6":"#3d5270"),borderRadius:6,padding:"5px 10px",fontSize:10,fontWeight:activeSite===site?700:400,cursor:"pointer",fontFamily:"inherit",textAlign:"left"}}>
+                  {site}
+                </button>
+              ))}
             </div>
           </div>
 
