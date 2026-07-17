@@ -709,32 +709,30 @@ const PAGES_AVEC_SITE = ["dashboard","implantation","interventions","saisiepassa
   "cartographie","maintenancedeiv","statistiques","planactions","conformite","audit",
   "traitementthermique","deepcleaning","maintenancecleaning","assainissement","desinsectisation"];
 
-// Selecteur de site. Lit les globales SITES_DISPO / SITE_ACTIF, donc le parent doit
-// se re-rendre apres le chargement de config_client (forceConfigUpdate s en charge).
+// Selecteur de site : un bouton par site, bascule en un clic. Lit les globales
+// SITES_DISPO / SITE_ACTIF, donc le parent doit se re-rendre apres le chargement
+// de config_client (forceConfigUpdate s en charge).
 function SiteSwitcher({ compact }) {
   if (SITES_DISPO.length <= 1) return null;
-  const courant = SITES_DISPO.filter(s => s.id === SITE_ACTIF)[0] || SITES_DISPO[0];
-  const pad = compact ? "4px 9px 4px 10px" : "7px 12px 7px 14px";
-  const tailleSite = compact ? 12 : 15;
+  const taille = compact ? 10 : 11;
+  const marge = compact ? "3px 8px" : "4px 11px";
   return (
-    <div title="Changer de site" style={{ position:"relative", display:"inline-flex", alignItems:"center", gap: compact?7:10,
-      background:"rgba(139,92,246,0.14)", border:"1px solid rgba(139,92,246,0.55)", borderRadius:11,
-      padding:pad, cursor:"pointer" }}>
-      <div style={{ width:3, alignSelf:"stretch", borderRadius:2, background:"#8b5cf6", marginRight:2 }}/>
-      <div style={{ display:"flex", flexDirection:"column", lineHeight:1.2, pointerEvents:"none" }}>
-        <span style={{ fontSize:8, fontWeight:700, color:"#a78bfa", letterSpacing:1.4, textTransform:"uppercase" }}>Site</span>
-        <span style={{ fontSize:tailleSite, fontWeight:800, color:"#f1f5f9", whiteSpace:"nowrap" }}>{courant ? courant.site : ""}</span>
-      </div>
-      <svg width="11" height="7" viewBox="0 0 11 7" style={{ pointerEvents:"none", marginLeft:2 }}>
-        <path d="M1 1L5.5 5.5L10 1" stroke="#a78bfa" strokeWidth="1.8" fill="none" strokeLinecap="round" strokeLinejoin="round"/>
-      </svg>
-      <select value={SITE_ACTIF} onChange={e=>changerSite(e.target.value)}
-        style={{ position:"absolute", inset:0, width:"100%", height:"100%", opacity:0, cursor:"pointer",
-                 border:"none", appearance:"none", fontFamily:"inherit" }}>
-        {SITES_DISPO.map(s=>(
-          <option key={s.id} value={s.id} style={{background:"#243352",color:"#f1f5f9",fontWeight:600}}>{s.site}</option>
-        ))}
-      </select>
+    <div style={{ display:"inline-flex", alignItems:"center", gap:2, background:"#243352",
+      border:"1px solid #3d5270", borderRadius:8, padding:2 }}>
+      {SITES_DISPO.map(s => {
+        var actif = s.id === SITE_ACTIF;
+        return (
+          <button key={s.id} onClick={()=>{ if (!actif) changerSite(s.id); }}
+            title={actif ? "Site affiche" : "Basculer sur " + s.site}
+            style={{ background: actif ? "#1d4ed8" : "transparent",
+                     color: actif ? "#fff" : "#94a3b8",
+                     border:"none", borderRadius:6, padding:marge, fontSize:taille,
+                     fontWeight: actif ? 700 : 600, cursor: actif ? "default" : "pointer",
+                     fontFamily:"inherit", whiteSpace:"nowrap" }}>
+            {s.site}
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -13532,7 +13530,18 @@ export default function App() {
 
 function AppPortail({ isAdmin, onLogout }) {
   window.__isAdmin = isAdmin;
-  const [page, setPage] = useState("dashboard");
+  // La page est persistee : changerSite recharge la fenetre, et sans ca on
+  // retombait sur le tableau de bord a chaque bascule de site. Le bouton de
+  // rafraichissement et F5 conservent aussi la page pour la meme raison.
+  const [page, setPage] = useState(() => {
+    try {
+      var enregistree = window.localStorage.getItem("aads_page");
+      return enregistree && VIEWS[enregistree] ? enregistree : "dashboard";
+    } catch(_e) { return "dashboard"; }
+  });
+  useEffect(() => {
+    try { window.localStorage.setItem("aads_page", page); } catch(_e) {}
+  }, [page]);
   const [reinterventions, setReinterventions] = useState(REINIT_INIT);
   const [passagesGlobaux, setPassagesGlobaux] = useState([]);
 
