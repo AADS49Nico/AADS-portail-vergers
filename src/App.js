@@ -132,12 +132,12 @@ function NetworkIndicator({ pendingCount, onSync }) {
 // IMAGES (inlined — remplacez par vos vraies données base64)
 // ============================================================
 // PLAN_IMG retire - les plans sont maintenant geres dynamiquement via Supabase (table 'plans'), sans plan par defaut au demarrage
-let BANNER_IMG = "https://oywowtpnuffvvgjffjsc.supabase.co/storage/v1/object/sign/Image/LOGO%20AADS.png?token=eyJraWQiOiJzdG9yYWdlLXVybC1zaWduaW5nLWtleV80NTM5NGZiOS0yYmFiLTQxNWUtYWZkMS1kNjA4ZjUyMGM3ZTkiLCJhbGciOiJIUzI1NiJ9.eyJ1cmwiOiJJbWFnZS9MT0dPIEFBRFMucG5nIiwic2NvcGUiOiJkb3dubG9hZCIsImlhdCI6MTc4MzI2NTA5MSwiZXhwIjoyNDEzOTg1MDkxfQ.STpSBByeLsyFj5jFhI1voCvJxMWOunqgf7Eb7Z1UZfA";
-let TOQUE_LOGO = "";
+let BANNER_IMG = "";   // logo AADS : a televerser dans le storage de CETTE base
+let TOQUE_LOGO = "";   // logo client : c etait celui de La Toque, il n a rien a faire ici
 
 const CLIENT_CONFIG = {
-  nom: "Les Vergers d'Anjou",
-  contrat: "000903",
+  nom: "",
+  contrat: "",
   site: "",
   type_site: "",
   date_debut: "",
@@ -146,10 +146,6 @@ const CLIENT_CONFIG = {
   seuil_vigilance: 5,
   seuil_critique: 10,
 };
-
-
-const SITES_VERGERS = ["DURTAL", "ECOUFLANT", "ST BARTHELEMY D'ANJOU", "ST SYLVAIN D'ANJOU", "VARENNES SUR LOIRE"];
-const CONTRAT_VERGERS = "000903";
 
 let AADS_CONFIG = {
   adresse: "135 Le Breuil, 49125 Tierce",
@@ -166,16 +162,43 @@ let AADS_CONFIG = {
 // ============================================================
 // SUPABASE
 // ============================================================
-const SUPABASE_URL = "https://oywowtpnuffvvgjffjsc.supabase.co";
-const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im95d293dHBudWZmdnZnamZmanNjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEwMTgwNDcsImV4cCI6MjA5NjU5NDA0N30.2f6iFq5b-vdUA6vZs_BDHg6IG-X-lEKvPoTGGhg7M44";
+const SUPABASE_URL = "https://mqtydhsctxnbaarwxrvy.supabase.co";
+const SUPABASE_KEY = "sb_publishable_OBvfJzoCkXfCdD3XVyPSOQ_ehBRiQQS";
+
+// ============================================================
+// MULTI-SITES
+// Les 19 tables ci-dessous portent une colonne site : elles sont filtrees.
+// config_client est la table des sites, jamais filtree par site.
+// Les autres (agrements, habilitations, produits_biocides, reglementations,
+// contrats_devis, config_aads/auth/logos) sont communes au client ou a AADS.
+// ============================================================
+const TABLES_PAR_SITE = ["postes","passages","plans","plans_dessines","plan_actions",
+  "poste_positions","audits","config","assainissement","conformite_ifs","deep_cleaning",
+  "desinsectisation","maintenance_cleaning","maintenance_deiv_appareils",
+  "maintenance_deiv_interventions","reinterventions","traitement_thermique","seuils"];
+
+let SITE_ACTIF = "";
+try { SITE_ACTIF = window.localStorage.getItem("aads_site_actif") || ""; } catch(_e) { SITE_ACTIF = ""; }
+let SITES_DISPO = [];
+
+function tableParSite(table) { return TABLES_PAR_SITE.indexOf(String(table).split("?")[0]) !== -1; }
+// Si le site est inconnu, on renvoie un filtre impossible plutot que rien :
+// mieux vaut un ecran vide qu un melange des 5 sites.
+function filtreSite(table) {
+  if (!tableParSite(table)) return "";
+  return "&site=eq." + encodeURIComponent(SITE_ACTIF || "__non_defini__");
+}
+function changerSite(id) {
+  try { window.localStorage.setItem("aads_site_actif", id); } catch(_e) { return; }
+  window.location.reload();
+}
 
 async function sbFetch(path, method, body, extraHeaders) {
-  const headers = {
-    apikey: SUPABASE_KEY,
-    Authorization: "Bearer " + SUPABASE_KEY,
-    "Content-Type": "application/json",
-    ...extraHeaders,
-  };
+  const headers = { apikey: SUPABASE_KEY, "Content-Type": "application/json" };
+  // Ancienne cle anon = JWT, PostgREST y lit le role, elle part en Bearer.
+  // Nouvelle cle sb_publishable_ n est pas un JWT : en Bearer elle serait rejetee.
+  if (SUPABASE_KEY.indexOf("eyJ") === 0) headers.Authorization = "Bearer " + SUPABASE_KEY;
+  Object.assign(headers, extraHeaders || {});
   const options = { method, headers };
   if (body) options.body = JSON.stringify(body);
   const res = await fetch(SUPABASE_URL + "/rest/v1/" + path, options);
@@ -188,20 +211,16 @@ async function sbFetch(path, method, body, extraHeaders) {
   return res.json().catch(() => true); // succes, corps non-JSON ou vide -> true plutot que null
 }
 async function sbGet(table) {
-  const siteFilter = CLIENT_CONFIG.site ? "&site=eq." + encodeURIComponent(CLIENT_CONFIG.site) : "";
-  const siteableTables = ["postes","passages","plans","plans_dessines","plan_actions","audits","poste_positions"];
-  const useSite = siteableTables.includes(table) && CLIENT_CONFIG.site;
-  return sbFetch(table + "?contrat=eq." + CLIENT_CONFIG.contrat + (useSite ? siteFilter : "") + "&order=id.asc", "GET");
+  return sbFetch(table + "?contrat=eq." + CLIENT_CONFIG.contrat + filtreSite(table) + "&order=id.asc", "GET");
 }
 async function sbUpsert(table, data) {
-  const siteableTables = ["postes","passages","plans","plans_dessines","plan_actions","audits","poste_positions"];
-  const dataWithSite = siteableTables.includes(table) && CLIENT_CONFIG.site && !data.site
-    ? { ...data, site: CLIENT_CONFIG.site }
-    : data;
-  return sbFetch(table, "POST", dataWithSite, { Prefer: "resolution=merge-duplicates,return=representation" });
+  const d = !tableParSite(table) ? data
+    : Array.isArray(data) ? data.map(x => ({ ...x, site: (x && x.site) || SITE_ACTIF }))
+    : { ...data, site: (data && data.site) || SITE_ACTIF };
+  return sbFetch(table, "POST", d, { Prefer: "resolution=merge-duplicates,return=representation" });
 }
 async function sbUpdate(table, id, data) {
-  return sbFetch(table + "?id=eq." + id + "&contrat=eq." + CLIENT_CONFIG.contrat, "PATCH", data, { Prefer: "return=representation" });
+  return sbFetch(table + "?id=eq." + id + "&contrat=eq." + CLIENT_CONFIG.contrat + filtreSite(table), "PATCH", data, { Prefer: "return=representation" });
 }
 // Variante stricte : leve une exception en cas d'echec HTTP reel, avec le detail de l'erreur Supabase.
 // A utiliser uniquement la ou l'appelant gere explicitement l'echec (ex: ajout de postes sur un plan).
@@ -224,7 +243,7 @@ async function sbUpsertStrict(table, data) {
   return res.json().catch(() => true);
 }
 async function sbDelete(table, id) {
-  return sbFetch(table + "?id=eq." + id + "&contrat=eq." + CLIENT_CONFIG.contrat, "DELETE");
+  return sbFetch(table + "?id=eq." + id + "&contrat=eq." + CLIENT_CONFIG.contrat + filtreSite(table), "DELETE");
 }
 
 // Place ou deplace un poste sur un plan. Un poste ne peut etre que sur un seul plan a la fois
@@ -661,7 +680,7 @@ function ExportBtn({ onClick, label }) {
 // ============================================================
 function Dashboard({ onNav, reinterventions, onLogoClick, onParamsClick, passagesGlobaux, seuilsGlobaux }) {
   const [localPassages, setLocalPassages] = useState([]);
-  const [filterYear, setFilterYear] = useState("Tout");
+  const [filterYear, setFilterYear] = useState(null);
   const [postesTotal, setPostesTotal] = useState(0);
   const [nbMaintenancesDeiv, setNbMaintenancesDeiv] = useState(0);
   useEffect(() => {
@@ -694,8 +713,25 @@ function Dashboard({ onNav, reinterventions, onLogoClick, onParamsClick, passage
   }) : PASSAGES;
 
   const pd = d => { if(!d)return new Date(0); const p=(d||"").split("/"); return p.length===3?new Date(p[2]+"-"+p[1]+"-"+p[0]):new Date(d); };
-  const passagesSorted = passagesSource.filter(p=>p.type!=="Insectes volants").slice().sort((a,b)=>pd(b.date)-pd(a.date));
-  const passagesDeivSorted = passagesSource.filter(p=>p.type==="Insectes volants").slice().sort((a,b)=>pd(b.date)-pd(a.date));
+  const yearOf = d => (d||"").split("/")[2] || "";
+
+  // Annees presentes dans les passages, de la plus recente a la plus ancienne
+  const anneesList = [...new Set(passagesSource.map(p => yearOf(p.date)).filter(Boolean))].sort((a,b) => b-a);
+  const anneesKey = anneesList.join(",");
+
+  // Annee affichee par defaut : l annee en cours si elle a des passages, sinon la plus recente
+  useEffect(() => {
+    if (filterYear === null && anneesList.length > 0) {
+      const courante = String(new Date().getFullYear());
+      setFilterYear(anneesList.indexOf(courante) !== -1 ? courante : anneesList[0]);
+    }
+  }, [anneesKey]);
+
+  const matchYear = p => (filterYear === null || filterYear === "Tout") ? true : yearOf(p.date) === filterYear;
+
+  const passagesSorted = passagesSource.filter(p=>p.type!=="Insectes volants" && matchYear(p)).slice().sort((a,b)=>pd(b.date)-pd(a.date));
+  const passagesDeivSorted = passagesSource.filter(p=>p.type==="Insectes volants" && matchYear(p)).slice().sort((a,b)=>pd(b.date)-pd(a.date));
+  const reinterventionsAnnee = (reinterventions||[]).filter(matchYear);
   const last = passagesSorted[0] || { anomalies:0, conso_totale:0, conso_partielle:0, date:"—", statut:"—" };
   const lastDeiv = passagesDeivSorted[0] || null;
 
@@ -708,12 +744,12 @@ function Dashboard({ onNav, reinterventions, onLogoClick, onParamsClick, passage
   const lvlColor = lvl === "critique" ? "#ef4444" : lvl === "alerte" ? "#f59e0b" : "#22c55e";
   const lvlLabel = lvl === "critique" ? "SEUIL CRITIQUE DEPASSE" : lvl === "alerte" ? "SEUIL DE VIGILANCE ATTEINT" : "ACTIVITE NORMALE";
 
-  const lastReinv = reinterventions && reinterventions.length > 0
-    ? reinterventions.slice().sort((a,b) => pd(b.date)-pd(a.date))[0]
+  const lastReinv = reinterventionsAnnee.length > 0
+    ? reinterventionsAnnee.slice().sort((a,b) => pd(b.date)-pd(a.date))[0]
     : null;
 
   function getPct(idx) {
-    if (idx >= passagesSorted.length - 1) return null;
+    if (idx < 0 || idx >= passagesSorted.length - 1) return null;
     const curr = passagesSorted[idx].anomalies;
     const prev = passagesSorted[idx + 1].anomalies;
     if (prev === 0) return null;
@@ -730,7 +766,7 @@ function Dashboard({ onNav, reinterventions, onLogoClick, onParamsClick, passage
 
   function handleExport() {
     const sorted = passagesSorted;
-    const filtered = filterYear === "Tout" ? sorted : sorted.filter(p => p.date.split("/")[2] === filterYear);
+    const filtered = passagesSorted;
     const pctGlobalStr = pctGlobal !== null ? (pctGlobal > 0 ? "+" : "") + pctGlobal + "%" : "-";
     const rows = filtered.map(p => {
       const idx = sorted.indexOf(p);
@@ -741,17 +777,17 @@ function Dashboard({ onNav, reinterventions, onLogoClick, onParamsClick, passage
       return "<tr><td>" + p.date + "</td><td style='font-weight:700;color:" + pctColor + "'>" + pctStr + "</td><td class='tot'>" + p.conso_totale + "</td><td class='par'>" + p.conso_partielle + "</td><td>" + p.total + "</td><td>" + p.statut + "</td></tr>";
     }).join("");
     const reinvHtml = lastReinv ? "<div class='kpi'><div class='kpi-v' style='color:#dc2626'>" + lastReinv.date + "</div><div class='kpi-l'>Derniere reintervention</div></div>" : "";
-    const anneeHtml = filterYear !== "Tout" ? " - " + filterYear : "";
+    const anneeHtml = (filterYear && filterYear !== "Tout") ? " - " + filterYear : "";
     exportHTML(
-      "Tableau de bord - " + CLIENT_CONFIG.nom,
+      "Tableau de bord - " + CLIENT_CONFIG.nom + anneeHtml,
       "<style>@page{size:A4;margin:8mm 10mm;}body{padding:8mm;font-size:10px;}.kpi-grid{grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:12px;}.kpi{padding:6px;}.kpi-v{font-size:15px;}h1{font-size:15px;margin-bottom:10px;}h2{margin:10px 0 6px;}table{font-size:9px;}th,td{padding:4px 6px;}</style>" +
-      "<h1>Tableau de bord - " + CLIENT_CONFIG.nom + "</h1>" +
+      "<h1>Tableau de bord - " + CLIENT_CONFIG.nom + anneeHtml + "</h1>" +
       "<p style='color:#7a90aa;margin-bottom:16px'>" + CLIENT_CONFIG.type_site + " - " + new Date().toLocaleDateString("fr-FR") + "</p>" +
       "<div class='kpi-grid'>" +
         "<div class='kpi'><div class='kpi-v' style='color:#1d4ed8'>" + postesTotal + "</div><div class='kpi-l'>Postes controles</div></div>" +
         "<div class='kpi'><div class='kpi-v' style='color:#7c3aed'>" + passagesSorted.length + "</div><div class='kpi-l'>Passages periodiques</div></div>" +
         "<div class='kpi'><div class='kpi-v' style='color:#d97706'>" + passagesDeivSorted.length + "</div><div class='kpi-l'>Passages DEIV</div></div>" +
-        "<div class='kpi'><div class='kpi-v' style='color:#dc2626'>" + (reinterventions ? reinterventions.length : 0) + "</div><div class='kpi-l'>Réinterventions</div></div>" +
+        "<div class='kpi'><div class='kpi-v' style='color:#dc2626'>" + reinterventionsAnnee.length + "</div><div class='kpi-l'>Réinterventions</div></div>" +
         "<div class='kpi'><div class='kpi-v' style='color:" + (pctGlobal !== null && pctGlobal <= 0 ? "green" : "red") + "'>" + pctGlobalStr + "</div><div class='kpi-l'>Evolution globale</div></div>" +
         "<div class='kpi'><div class='kpi-v' style='color:#7c3aed'>" + last.date + "</div><div class='kpi-l'>Dernier passage periodique</div></div>" +
         (lastDeiv ? "<div class='kpi'><div class='kpi-v' style='color:#d97706'>" + lastDeiv.date + "</div><div class='kpi-l'>Dernier passage DEIV</div></div>" : "") +
@@ -779,6 +815,14 @@ function Dashboard({ onNav, reinterventions, onLogoClick, onParamsClick, passage
         <div style={{ display:"flex", alignItems:"center", gap:16, marginBottom: 4 }}>
           {TOQUE_LOGO && <img src={TOQUE_LOGO} alt="Logo client" onClick={onLogoClick} style={{ height:56, width:"auto", objectFit:"contain", borderRadius:8, background:"rgba(255,255,255,0.08)", padding:4, cursor:"pointer" }} title="Cliquer pour modifier le logo"/>}
           <div style={{ fontSize: 24, fontWeight: 800, color: "#f1f5f9" }}>{CLIENT_CONFIG.nom}</div>
+          {SITES_DISPO.length > 1 && (
+            <select value={SITE_ACTIF} onChange={e=>changerSite(e.target.value)} title="Changer de site"
+              style={{background:"#8b5cf6",color:"#fff",border:"2px solid #c4b5fd",borderRadius:10,padding:"8px 14px",fontSize:16,fontWeight:800,fontFamily:"inherit",cursor:"pointer",letterSpacing:0.5}}>
+              {SITES_DISPO.map(s=>(
+                <option key={s.id} value={s.id} style={{background:"#243352",color:"#f1f5f9",fontWeight:600}}>{s.site}</option>
+              ))}
+            </select>
+          )}
         </div>
         <div style={{ fontSize: 13, color: "#7a90aa", display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
           <span>{CLIENT_CONFIG.type_site} - Contrat N {CLIENT_CONFIG.contrat}</span>
@@ -804,7 +848,7 @@ function Dashboard({ onNav, reinterventions, onLogoClick, onParamsClick, passage
             <div style={{ fontSize: 10, color: "#7a90aa", marginTop: 2 }}>Maintenances DEIV</div>
           </div>
           <div style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 10, padding: "10px 18px" }}>
-            <div style={{ fontSize: 18, fontWeight: 800, color: "#ef4444" }}>{reinterventions ? reinterventions.length : 0}</div>
+            <div style={{ fontSize: 18, fontWeight: 800, color: "#ef4444" }}>{reinterventionsAnnee.length}</div>
             <div style={{ fontSize: 10, color: "#7a90aa", marginTop: 2 }}>Réinterventions</div>
           </div>
           <div style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 10, padding: "10px 18px" }}>
@@ -840,8 +884,9 @@ function Dashboard({ onNav, reinterventions, onLogoClick, onParamsClick, passage
         if (lvl === "critique") alertes.push({ type:"critique", icon:"🔴", titre:"Seuil critique dépassé", msg:`${last.anomalies} consommation(s) sur ${nbPostesRongeurs} postes (${tauxActivite}%) lors du dernier passage (${last.date}) — seuil critique : ${seuilCritique}%` });
         else if (lvl === "alerte") alertes.push({ type:"alerte", icon:"🟠", titre:"Seuil de vigilance atteint", msg:`${last.anomalies} consommation(s) sur ${nbPostesRongeurs} postes (${tauxActivite}%) lors du dernier passage (${last.date}) — seuil vigilance : ${seuilVigilance}%` });
 
-        // 2. Passages manqués (fréquence contractuelle)
-        if (passagesSource.length > 0) {
+        // 2. Passages manqués (fréquence contractuelle) - uniquement sur l annee en cours
+        const anneeEnCours = String(new Date().getFullYear());
+        if (passagesSorted.length > 0 && (filterYear === "Tout" || filterYear === anneeEnCours)) {
           const lastDate = pd(passagesSorted[0].date);
           const now = new Date();
           const daysSince = Math.floor((now-lastDate)/(1000*60*60*24));
@@ -852,7 +897,7 @@ function Dashboard({ onNav, reinterventions, onLogoClick, onParamsClick, passage
         }
 
         // 3. Réinterventions récentes
-        const reinterRecentes = reinterventions && reinterventions.filter(r => {
+        const reinterRecentes = reinterventionsAnnee.filter(r => {
           const d = pd(r.date); const now = new Date();
           return (now-d)/(1000*60*60*24) <= 30;
         });
@@ -897,7 +942,7 @@ function Dashboard({ onNav, reinterventions, onLogoClick, onParamsClick, passage
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, flexWrap: "wrap", gap: 8 }}>
           <div style={{ fontSize: 12, fontWeight: 700, color: "#7a90aa", letterSpacing: 1, textTransform: "uppercase" }}>Historique des passages mensuels</div>
           <div style={{ display: "flex", gap: 4 }}>
-            {["Tout", ...[...new Set(passagesSource.map(p => p.date.split("/")[2]))].sort((a,b) => b-a)].map(y => (
+            {["Tout", ...anneesList].map(y => (
               <button key={y} onClick={() => setFilterYear(y)}
                 style={{ background: filterYear === y ? "#1d4ed8" : "#1a2540", color: filterYear === y ? "#fff" : "#7a90aa", border: "1px solid " + (filterYear === y ? "#1d4ed8" : "#3d5270"), borderRadius: 6, padding: "3px 10px", fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
                 {y}
@@ -906,7 +951,7 @@ function Dashboard({ onNav, reinterventions, onLogoClick, onParamsClick, passage
           </div>
         </div>
         {(() => {
-          const filtered = filterYear === "Tout" ? passagesSorted : passagesSorted.filter(p => p.date.split("/")[2] === filterYear);
+          const filtered = passagesSorted;
           const byYear = {};
           filtered.forEach(p => {
             const year = p.date.split("/")[2] || "?";
@@ -951,7 +996,7 @@ function Dashboard({ onNav, reinterventions, onLogoClick, onParamsClick, passage
 function Interventions({ reinterventions, setReinterventions, passagesGlobaux, setPassagesGlobaux }) {
   const [sel, setSel]         = useState(null);
   const [tab, setTab]         = useState("tous");
-  const [filterAnnee, setFilterAnnee] = useState("Toutes");
+  const [filterAnnee, setFilterAnnee] = useState(null);
   const [showForm, setShowForm] = useState(false);
   const [passagesSaisies, setPassagesSaisies] = useState([]);
   const [lightboxImg, setLightboxImg] = useState(null);
@@ -1019,9 +1064,23 @@ function Interventions({ reinterventions, setReinterventions, passagesGlobaux, s
 
   const anneesDispo = [...new Set(allEventsRaw.map(e=>{ const d=parseDate(e.date); return d&&!isNaN(d)?d.getFullYear():null; }).filter(Boolean))].sort((a,b)=>b-a);
 
-  const allEvents = filterAnnee==="Toutes" ? allEventsRaw : allEventsRaw.filter(e=>{ const d=parseDate(e.date); return d && d.getFullYear()===parseInt(filterAnnee); });
+  const anneesKey = anneesDispo.join(",");
 
-  const nbDeiv = passagesToShow.filter(p=>p.type==="Insectes volants" && (filterAnnee==="Toutes" || (parseDate(p.date)&&parseDate(p.date).getFullYear()===parseInt(filterAnnee)))).length;
+  // Annee affichee par defaut : l annee en cours si elle a des evenements, sinon la plus recente
+  useEffect(() => {
+    if (filterAnnee === null && anneesDispo.length > 0) {
+      const courante = new Date().getFullYear();
+      setFilterAnnee(String(anneesDispo.indexOf(courante) !== -1 ? courante : anneesDispo[0]));
+    }
+  }, [anneesKey]);
+
+  const allEvents = (filterAnnee===null||filterAnnee==="Toutes") ? allEventsRaw : allEventsRaw.filter(e=>{ const d=parseDate(e.date); return d && d.getFullYear()===parseInt(filterAnnee); });
+
+  // Passages de l annee affichee - alimente les compteurs du haut
+  const passagesAnnee = allEvents.filter(e=>e._kind==="passage");
+  const nbDeiv = passagesAnnee.filter(p=>p.type==="Insectes volants").length;
+  const nbPassages = passagesAnnee.length - nbDeiv;
+  const anneeLabel = (filterAnnee && filterAnnee !== "Toutes") ? filterAnnee : "Toutes les annees";
 
   const filtered = tab === "passages"       ? allEvents.filter(e => e._kind === "passage" && e.type !== "Insectes volants")
                  : tab === "reinterventions" ? allEvents.filter(e => e._kind === "reinv")
@@ -1031,16 +1090,16 @@ function Interventions({ reinterventions, setReinterventions, passagesGlobaux, s
   const nbReinv = allEvents.filter(e=>e._kind==="reinv").length;
 
   // Dernier passage periodique depuis Supabase (ou fallback PASSAGES)
-  const lastPassageDate = passagesSaisies.length > 0
-    ? passagesSaisies.slice().sort((a,b) => {
+  const lastPassageDate = passagesAnnee.length > 0
+    ? passagesAnnee.slice().sort((a,b) => {
         const pd = d => { const p=(d||"").split("/"); return p.length===3?new Date(p[2]+"-"+p[1]+"-"+p[0]):new Date(d||0); };
         return pd(b.date)-pd(a.date);
       })[0].date
-    : PASSAGES[PASSAGES.length-1]&&PASSAGES[PASSAGES.length-1].date;
+    : "—";
 
   // Derniere reintervention
   const lastReinvDate = nbReinv > 0
-    ? (reinterventions || []).slice().sort((a, b) => {
+    ? allEvents.filter(e=>e._kind==="reinv").slice().sort((a, b) => {
         const pd = d => { if (!d) return 0; const p = (d||"").split("/"); return p.length===3 ? new Date(p[2]+"-"+p[1]+"-"+p[0]) : new Date(d||0); };
         return pd(b.date) - pd(a.date);
       })[0].date
@@ -1053,31 +1112,31 @@ function Interventions({ reinterventions, setReinterventions, passagesGlobaux, s
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:16, flexWrap:"wrap", gap:10 }}>
         <div>
           <div style={{ fontSize:22, fontWeight:800, color:"#f1f5f9", marginBottom:2 }}>Suivi des passages</div>
-          <div style={{ fontSize:13, color:"#7a90aa" }}>{(passagesSaisies.length||PASSAGES.length)} passages — {nbReinv} réintervention(s)</div>
+          <div style={{ fontSize:13, color:"#7a90aa" }}>{passagesAnnee.length} passages — {nbReinv} réintervention(s)</div>
         </div>
         <div style={{ display:"flex", gap:8 }}>
           <button onClick={() => {
-            const passagesRows = (passagesSaisies.length > 0 ? passagesSaisies : PASSAGES).map(p => {
+            const passagesRows = passagesAnnee.map(p => {
               const saisiesP = typeof p.saisies==="string"?JSON.parse(p.saisies||"{}"):p.saisies||{};
               const ct = p.conso_totale ?? Object.values(saisiesP).filter(s=>s&&(s.etat==="Totale"||s.etat==="CONSOMMATION TOTALE")).length;
               const cp = p.conso_partielle ?? Object.values(saisiesP).filter(s=>s&&(s.etat==="25%"||s.etat==="50%"||s.etat==="75%"||s.etat==="CONSOMMATION PARTIELLE")).length;
               const tot = p.total ?? Object.keys(saisiesP).length;
               return "<tr><td>"+p.date+"</td><td>"+tot+"</td><td style='color:#dc2626;font-weight:700'>"+ct+"</td><td style='color:#d97706;font-weight:700'>"+cp+"</td><td>"+(p.statut||"")+"</td></tr>";
             }).join("");
-            const reinvRows = (reinterventions||[]).slice().sort((a,b) => {
+            const reinvRows = allEvents.filter(e=>e._kind==="reinv").slice().sort((a,b) => {
               const pd = d => { const p=(d||"").split("/"); return p.length===3?new Date(p[2]+"-"+p[1]+"-"+p[0]):new Date(d||0); };
               return pd(b.date) - pd(a.date);
             }).map(r =>
               "<tr><td>" + r.date + "</td><td>" + (r.technicien||"") + "</td><td>" + (r.poste||"") + "</td><td>" + (r.anomalie||"") + "</td><td>" + (r.statut||"") + "</td></tr>"
             ).join("");
-            exportHTML("Suivi des passages - " + CLIENT_CONFIG.nom,
-              "<h1>Suivi des passages — " + CLIENT_CONFIG.nom + "</h1>" +
-              "<p style='color:#7a90aa;margin-bottom:16px'>" + new Date().toLocaleDateString("fr-FR") + "</p>" +
+            exportHTML("Suivi des passages - " + CLIENT_CONFIG.nom + " - " + anneeLabel,
+              "<h1>Suivi des passages — " + CLIENT_CONFIG.nom + " — " + anneeLabel + "</h1>" +
+              "<p style='color:#7a90aa;margin-bottom:16px'>Edite le " + new Date().toLocaleDateString("fr-FR") + "</p>" +
               "<div class='kpi-grid'>" +
-                "<div class='kpi'><div class='kpi-v' style='color:#1d4ed8'>" + passagesToShow.length + "</div><div class='kpi-l'>Passages</div></div>" +
+                "<div class='kpi'><div class='kpi-v' style='color:#1d4ed8'>" + passagesAnnee.length + "</div><div class='kpi-l'>Passages</div></div>" +
                 "<div class='kpi'><div class='kpi-v' style='color:#dc2626'>" + nbReinv + "</div><div class='kpi-l'>Réinterventions</div></div>" +
-                "<div class='kpi'><div class='kpi-v' style='color:#7c3aed'>" + (passagesToShow.length + nbReinv) + "</div><div class='kpi-l'>Total interventions</div></div>" +
-                "<div class='kpi'><div class='kpi-v' style='color:#16a34a;font-size:14px'>" + (passagesToShow.length>0 ? passagesToShow.slice().filter(p=>p.type!=="Insectes volants").sort((a,b)=>{const pd=d=>{const p=(d||"").split("/");return p.length===3?new Date(p[2]+"-"+p[1]+"-"+p[0]):new Date(0);};return pd(b.date)-pd(a.date);})[0]?.date||"—" : "—") + "</div><div class='kpi-l'>Dernier passage</div></div>" +
+                "<div class='kpi'><div class='kpi-v' style='color:#7c3aed'>" + (passagesAnnee.length + nbReinv) + "</div><div class='kpi-l'>Total interventions</div></div>" +
+                "<div class='kpi'><div class='kpi-v' style='color:#16a34a;font-size:14px'>" + (passagesAnnee.length>0 ? passagesAnnee.slice().filter(p=>p.type!=="Insectes volants").sort((a,b)=>{const pd=d=>{const p=(d||"").split("/");return p.length===3?new Date(p[2]+"-"+p[1]+"-"+p[0]):new Date(0);};return pd(b.date)-pd(a.date);})[0]?.date||"—" : "—") + "</div><div class='kpi-l'>Dernier passage</div></div>" +
                 (lastReinvDate ? "<div class='kpi'><div class='kpi-v' style='color:#dc2626;font-size:14px'>" + lastReinvDate + "</div><div class='kpi-l'>Dernière réintervention</div></div>" : "") +
               "</div>" +
               "<h2>Historique des passages</h2>" +
@@ -1089,10 +1148,10 @@ function Interventions({ reinterventions, setReinterventions, passagesGlobaux, s
             Export PDF
           </button>
           <button onClick={() => {
-            const allPassages = passagesSaisies.length > 0 ? passagesSaisies : PASSAGES;
+            const allPassages = passagesAnnee;
             const headers = ["Date","Type","Technicien","Total postes","Conso totale","Conso partielle","Statut"];
             const rows = allPassages.map(p => [p.date, p.type||"", p.technicien||"", p.total||"", p.conso_totale||"", p.conso_partielle||"", p.statut||""]);
-            exportCSV("passages_"+CLIENT_CONFIG.nom.replace(/\s+/g,"_"), headers, rows);
+            exportCSV("passages_"+CLIENT_CONFIG.nom.replace(/\s+/g,"_")+"_"+anneeLabel.replace(/\s+/g,"_"), headers, rows);
           }}
             style={{ background:"#22c55e22", color:"#22c55e", border:"1px solid #22c55e44", borderRadius:8, padding:"9px 16px", fontSize:12, fontWeight:700, cursor:"pointer", fontFamily:"inherit" }}>
             Export Excel
@@ -1102,10 +1161,10 @@ function Interventions({ reinterventions, setReinterventions, passagesGlobaux, s
 
       {/* KPIs globaux */}
       <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(130px,1fr))", gap:10, marginBottom:16 }}>
-        <Kpi label="Passages"         value={passagesToShow.length - nbDeiv}  color="#3b82f6"/>
+        <Kpi label="Passages"         value={nbPassages}  color="#3b82f6"/>
         <Kpi label="Passages DEIV"    value={nbDeiv}           color="#f59e0b"/>
         <Kpi label="Réinterventions"  value={nbReinv}           color="#ef4444"/>
-        <Kpi label="Total interventions" value={passagesToShow.length + nbReinv} color="#a78bfa"/>
+        <Kpi label="Total interventions" value={passagesAnnee.length + nbReinv} color="#a78bfa"/>
         <Kpi label="Dernier passage"  value={lastPassageDate} color="#22c55e" fontSize={14}/>
         {lastReinvDate && <Kpi label="Derniere reintervention" value={lastReinvDate} color="#ef4444" fontSize={14}/>}
       </div>
@@ -1113,7 +1172,7 @@ function Interventions({ reinterventions, setReinterventions, passagesGlobaux, s
       {/* Filtres onglets */}
       <div style={{ display:"flex", gap:10, flexWrap:"wrap", alignItems:"center", marginBottom:14 }}>
         <div style={{ display:"flex", gap:4, background:"#1a2540", borderRadius:10, padding:3, width:"fit-content" }}>
-          {[["tous","Tout voir"],["passages","Passages ("+(passagesToShow.length-nbDeiv)+")"],["deiv","DEIV ("+nbDeiv+")"],["reinterventions","Reinterventions ("+nbReinv+")"]].map(([id,label]) => (
+          {[["tous","Tout voir"],["passages","Passages ("+nbPassages+")"],["deiv","DEIV ("+nbDeiv+")"],["reinterventions","Reinterventions ("+nbReinv+")"]].map(([id,label]) => (
             <button key={id} onClick={()=>setTab(id)}
               style={{ background:tab===id?(id==="deiv"?"#f59e0b":"#1d4ed8"):"transparent", color:tab===id?"#fff":"#7a90aa", border:"none", borderRadius:7, padding:"6px 14px", fontSize:12, fontWeight:600, cursor:"pointer", fontFamily:"inherit" }}>
               {label}
@@ -1123,7 +1182,7 @@ function Interventions({ reinterventions, setReinterventions, passagesGlobaux, s
         {anneesDispo.length > 0 && (
           <div style={{ display:"flex", gap:4, alignItems:"center" }}>
             <span style={{fontSize:11,color:"#7a90aa"}}>Annee :</span>
-            <select value={filterAnnee} onChange={e=>setFilterAnnee(e.target.value)}
+            <select value={filterAnnee||"Toutes"} onChange={e=>setFilterAnnee(e.target.value)}
               style={{background:"#243352",border:"1px solid #3d5270",borderRadius:7,padding:"6px 10px",color:"#f1f5f9",fontSize:12,fontFamily:"inherit",cursor:"pointer"}}>
               <option value="Toutes">Toutes</option>
               {anneesDispo.map(a=><option key={a} value={a}>{a}</option>)}
@@ -1149,7 +1208,8 @@ function Interventions({ reinterventions, setReinterventions, passagesGlobaux, s
               const conso_totale = p.conso_totale ?? Object.values(saisiesP).filter(s=>s&&(s.etat==="Totale"||s.etat==="CONSOMMATION TOTALE")).length;
               const conso_partielle = p.conso_partielle ?? Object.values(saisiesP).filter(s=>s&&(s.etat==="25%"||s.etat==="50%"||s.etat==="75%"||s.etat==="CONSOMMATION PARTIELLE")).length;
               const anomalies = p.anomalies ?? (conso_totale + conso_partielle + Object.values(saisiesP).filter(s=>s&&(parseInt(s.cap_souris||0)+parseInt(s.cap_ratBrun||0)+parseInt(s.cap_ratNoir||0))>0).length);
-              const total = p.total ?? Object.values(saisiesP).filter(s=>s&&(s.etat||(parseInt(s.cap_souris||0)+parseInt(s.cap_ratBrun||0)+parseInt(s.cap_ratNoir||0))>0)).length;
+              // Postes controles = postes reellement presents dans les saisies
+              const total = p.total ?? Object.keys(saisiesP).length;
               const pEnriched = {...p, conso_totale, conso_partielle, anomalies, total};
               const nbPostesTotal = passagesToShow.length > 0 ? Math.max(...passagesToShow.map(p=>{ const s=typeof p.saisies==="string"?JSON.parse(p.saisies||"{}"):p.saisies||{}; return Object.keys(s).length; }), 1) : 1;
               const tauxAct = nbPostesTotal > 0 ? Math.round(anomalies / nbPostesTotal * 100) : 0;
@@ -1200,11 +1260,6 @@ function Interventions({ reinterventions, setReinterventions, passagesGlobaux, s
                           })()}
                         </div>
                       </div>
-                      <div style={{ fontSize:12 }}>
-                        <span style={{ color:"#ef4444", fontWeight:700 }}>{p.conso_totale}</span> tot.&nbsp;
-                        <span style={{ color:"#f59e0b", fontWeight:700 }}>{p.conso_partielle}</span> part.
-                      </div>
-                      <Badge label={p.statut}/>
                       {reinvLiees.length > 0 && (
                         <span style={{ fontSize:10, fontWeight:700, background:"#ef444422", color:"#ef4444", border:"1px solid #ef444444", borderRadius:10, padding:"1px 8px" }}>
                           {reinvLiees.length} réintervention(s)
@@ -1359,6 +1414,7 @@ function Cartographie({ seuilsGlobaux }) {
   const [search, setSearch] = useState("");
   const [sel, setSel] = useState(null);
   const [filterMacro, setFilterMacro] = useState("Toutes");
+  const [filterAnnee, setFilterAnnee] = useState(null);
   const [editingConso, setEditingConso] = useState(false);
   const [consoEdit, setConsoEdit] = useState({});
 
@@ -1380,17 +1436,38 @@ function Cartographie({ seuilsGlobaux }) {
   }, []);
 
   // Construire les dates dynamiquement depuis les passages saisis
-  const DATES = passagesSaisies.length > 0
+  const DATES_ALL = passagesSaisies.length > 0
     ? [...new Set(passagesSaisies.map(p => p.date))].sort((a,b) => {
         const pd = d => { const p=d.split("/"); return p.length===3?new Date(p[2]+"-"+p[1]+"-"+p[0]):new Date(d); };
         return pd(a)-pd(b);
       })
     : [];
 
+  const anneesDispo = [...new Set(DATES_ALL.map(d => (d||"").split("/")[2]).filter(Boolean))].sort((a,b) => b-a);
+  const anneesKey = anneesDispo.join(",");
+
+  // Annee affichee par defaut : l annee en cours si elle a des passages, sinon la plus recente
+  useEffect(() => {
+    if (filterAnnee === null && anneesDispo.length > 0) {
+      const courante = String(new Date().getFullYear());
+      setFilterAnnee(anneesDispo.indexOf(courante) !== -1 ? courante : anneesDispo[0]);
+    }
+  }, [anneesKey]);
+
+  const DATES = (filterAnnee === null || filterAnnee === "Toutes")
+    ? DATES_ALL
+    : DATES_ALL.filter(d => (d||"").split("/")[2] === filterAnnee);
+
+  const anneeLabel = (filterAnnee && filterAnnee !== "Toutes") ? filterAnnee : "Toutes les annees";
+
+  const IV_CATS = ["Moucherons","Mouches","Moustiques","Hyménoptères","Lépidoptères","Coléoptères","Punaises","Tipules"];
+
   // Calculer les passages par poste depuis les saisies Supabase — fusionne tous les passages d'une même date
-  function getPassagePoste(posteId, date) {
+  // getPassageInfos conserve la valeur brute (pourcentage reel, comptage sans suffixe) pour les exports.
+  // getPassagePoste garde exactement la meme sortie qu avant : ecran et panneau de saisie inchanges.
+  function getPassageInfos(posteId, date) {
     const passagesDate = passagesSaisies.filter(p => p.date === date);
-    if (!passagesDate.length) return "";
+    if (!passagesDate.length) return { type:"vide", valeur:"" };
     // Fusionner les saisies de tous les passages de cette date
     const merged = {};
     passagesDate.forEach(passage => {
@@ -1406,20 +1483,40 @@ function Cartographie({ seuilsGlobaux }) {
       });
     });
     const s = merged[posteId];
-    if (!s) return "";
-    // Rongeurs - consommation
-    if (s.etat === "Totale" || s.etat === "CONSOMMATION TOTALE") return "CONSOMMATION TOTALE";
-    if (s.etat === "75%" || s.etat === "50%" || s.etat === "25%" || s.etat === "CONSOMMATION PARTIELLE") return "CONSOMMATION PARTIELLE";
+    if (!s) return { type:"vide", valeur:"" };
+    // Rongeurs - consommation : on garde le pourcentage reel
+    if (s.etat === "Totale" || s.etat === "CONSOMMATION TOTALE") return { type:"totale", valeur:"100%" };
+    if (s.etat === "75%" || s.etat === "50%" || s.etat === "25%") return { type:"partielle", valeur:s.etat };
+    if (s.etat === "CONSOMMATION PARTIELLE") return { type:"partielle", valeur:"" };
     // Rongeurs - captures
     const capR = (parseInt(s.cap_souris||0))+(parseInt(s.cap_ratBrun||0))+(parseInt(s.cap_ratNoir||0));
-    if (capR > 0) return capR + " cap.";
+    if (capR > 0) return { type:"cap", valeur:String(capR) };
     // Insectes volants (DEIV)
     const CATS = ["Moucherons","Mouches","Moustiques","Hyménoptères","Lépidoptères","Coléoptères","Punaises","Tipules"];
     const totalIV = CATS.reduce((acc,cat)=>acc+(parseInt(s["iv_"+cat]||0)),0);
-    if (totalIV > 0) return totalIV + " ins.";
+    if (totalIV > 0) return { type:"ins", valeur:String(totalIV) };
     // Blattes, Teignes, IPS
-    if (s.etat && !isNaN(parseFloat(s.etat)) && parseFloat(s.etat) > 0) return s.etat;
+    if (s.etat && !isNaN(parseFloat(s.etat)) && parseFloat(s.etat) > 0) return { type:"num", valeur:String(s.etat) };
+    return { type:"vide", valeur:"" };
+  }
+
+  // Sortie historique, strictement identique a avant le refactor
+  function getPassagePoste(posteId, date) {
+    const i = getPassageInfos(posteId, date);
+    if (i.type === "totale") return "CONSOMMATION TOTALE";
+    if (i.type === "partielle") return "CONSOMMATION PARTIELLE";
+    if (i.type === "cap") return i.valeur + " cap.";
+    if (i.type === "ins") return i.valeur + " ins.";
+    if (i.type === "num") return i.valeur;
     return "";
+  }
+
+  // Valeur pour les exports PDF et Excel : que le chiffre, sans suffixe, avec le pourcentage reel
+  function valeurExport(p, d) {
+    const i = (p.infos||{})[d] || { type:"vide", valeur:"" };
+    if (i.type === "vide") return "—";
+    if (i.type === "partielle" && !i.valeur) return "PAR";
+    return i.valeur;
   }
 
   // Postes enrichis avec données passages Supabase
@@ -1442,20 +1539,39 @@ function Cartographie({ seuilsGlobaux }) {
   }
 
   const postesAvecPassages = sortPostesNat(postes).map(p => {
-    const passages = {};
-    DATES.forEach(d => { passages[d] = getPassagePoste(p.id, d); });
-    return { ...p, passages };
+    const passages = {}; const infos = {};
+    DATES.forEach(d => { passages[d] = getPassagePoste(p.id, d); infos[d] = getPassageInfos(p.id, d); });
+    return { ...p, passages, infos };
   });
 
   const macros = ["Toutes", ...new Set(postesAvecPassages.map(p => p.macro))];
 
-  // Seuils partagés depuis App
+  // Seuils partages depuis App - sert a la coloration du tableau
   const seuilsDyn = {
-    Teignes: { vigilance: seuilsGlobaux.teignes.leger, critique: seuilsGlobaux.teignes.moyen },
-    Blattes: { vigilance: seuilsGlobaux.blattes.leger, critique: seuilsGlobaux.blattes.moyen },
-    IPS:     { vigilance: seuilsGlobaux.ips.leger,     critique: seuilsGlobaux.ips.moyen },
-    "Insectes volants": { vigilance: (seuilsGlobaux.iv.Moucherons||{}).leger||350, critique: (seuilsGlobaux.iv.Moucherons||{}).moyen||500 },
+    Teignes: { vigilance: (seuilsGlobaux.teignes||{}).leger, critique: (seuilsGlobaux.teignes||{}).moyen },
+    Blattes: { vigilance: (seuilsGlobaux.blattes||{}).leger, critique: (seuilsGlobaux.blattes||{}).moyen },
+    IPS:     { vigilance: (seuilsGlobaux.ips||{}).leger,     critique: (seuilsGlobaux.ips||{}).moyen },
+    "Insectes volants": { vigilance: ((seuilsGlobaux.iv||{}).Moucherons||{}).leger||350, critique: ((seuilsGlobaux.iv||{}).Moucherons||{}).moyen||500 },
   };
+
+  // Lignes du tableau des seuils d infestation - sert aussi aux exports
+  const sRg  = seuilsGlobaux.rongeurs || {};
+  const sExt = seuilsGlobaux.rongeursExt || {};
+  const sInt = seuilsGlobaux.rongeursInt || {};
+  const seuilsInfestRows = [
+    ["Rongeurs exterieurs (captures)", "< " + sExt.leger, sExt.leger + " - " + sExt.moyen, "> " + sExt.moyen],
+    ["Rongeurs interieurs (captures)", "< " + sInt.leger, sInt.leger + " - " + sInt.moyen, "> " + sInt.moyen],
+    ["Rongeurs - taux activite (%)", "< " + sRg.taux_vigilance, sRg.taux_vigilance + " - " + sRg.taux_critique, "> " + sRg.taux_critique],
+    ["Rongeurs - consommation appats", "Aucune", sRg.conso_orange, sRg.conso_rouge],
+    ["IPS (total captures)", "< " + seuilsDyn.IPS.vigilance, seuilsDyn.IPS.vigilance + " - " + seuilsDyn.IPS.critique, "> " + seuilsDyn.IPS.critique],
+    ["Teignes", "< " + seuilsDyn.Teignes.vigilance, seuilsDyn.Teignes.vigilance + " - " + seuilsDyn.Teignes.critique, "> " + seuilsDyn.Teignes.critique],
+    ["Blattes", "< " + seuilsDyn.Blattes.vigilance, seuilsDyn.Blattes.vigilance + " - " + seuilsDyn.Blattes.critique, "> " + seuilsDyn.Blattes.critique],
+  ].concat(IV_CATS.map(cat => {
+    const v = (seuilsGlobaux.iv || {})[cat] || {};
+    const l = v.leger ?? 0;
+    const m = v.moyen ?? 0;
+    return ["Insectes volants - " + cat, "< " + l, l + " - " + m, "> " + m];
+  }));
 
   const filtered = postesAvecPassages.filter(p => {
     const nuisible = p.nuisible || "Rongeurs";
@@ -1481,6 +1597,23 @@ function Cartographie({ seuilsGlobaux }) {
     setPostes(prev => prev.map(p => p.id === posteId ? { ...p, passages: consoEdit } : p));
     if (sel && sel.id === posteId) setSel(prev => ({ ...prev, passages: consoEdit }));
     setEditingConso(false);
+  }
+
+  // Couleur unique pour ecran ET exports : evite que les deux divergent
+  function couleurSeuil(p, d) {
+    const nuisible = p.nuisible || "Rongeurs";
+    const v = p.passages[d];
+    if (INSECTES_TYPES.includes(nuisible)) {
+      if (!v) return "#22c55e";
+      const num = parseFloat(v) || 0;
+      const s = seuilsDyn[nuisible];
+      return s ? (num >= s.critique ? "#ef4444" : num >= s.vigilance ? "#f59e0b" : "#22c55e") : "#22c55e";
+    }
+    if (v === "CONSOMMATION TOTALE" || v === "Totale") return "#ef4444";
+    if (v === "CONSOMMATION PARTIELLE") return "#f59e0b";
+    if (v === "75%" || v === "50%" || v === "25%") return "#f59e0b";
+    if (v && !isNaN(parseFloat(v)) && parseFloat(v) > 0) return "#f59e0b";
+    return "#22c55e";
   }
 
   function getTendance(poste) {
@@ -1510,16 +1643,15 @@ function Cartographie({ seuilsGlobaux }) {
               const tendance = getTendance(p);
               const tcol = tendance==="Baisse"?"green":tendance==="Hausse"?"red":"gray";
               const dateCols = DATES.map(d => {
-                const v = p.passages[d]||"";
-                const col = v==="CONSOMMATION TOTALE"||v==="Totale"?"#ef4444":v?"#f59e0b":"#22c55e";
-                const label = v==="CONSOMMATION TOTALE"||v==="Totale"?"TOT":v==="CONSOMMATION PARTIELLE"||v==="25%"||v==="50%"||v==="75%"?"PAR":v||"—";
+                const col = couleurSeuil(p, d);
+                const label = valeurExport(p, d);
                 return "<td style='font-weight:700;color:"+col+"'>"+label+"</td>";
               }).join("");
               return "<tr><td style='font-family:monospace;font-weight:700'>"+p.id+"</td><td>"+(p.zone||"")+"</td><td>"+nuisible+"</td>"+dateCols+"<td style='color:"+tcol+";font-weight:700'>"+tendance+"</td></tr>";
             }).join("");
-            exportHTML("Postes et Zones - "+CLIENT_CONFIG.nom,
-              "<h1>Postes et Zones - "+CLIENT_CONFIG.nom+"</h1>" +
-              "<p style='color:#7a90aa;margin-bottom:16px'>" + new Date().toLocaleDateString("fr-FR") + "</p>" +
+            exportHTML("Postes et Zones - "+CLIENT_CONFIG.nom+" - "+anneeLabel,
+              "<h1>Postes et Zones - "+CLIENT_CONFIG.nom+" - "+anneeLabel+"</h1>" +
+              "<p style='color:#7a90aa;margin-bottom:16px'>" + DATES.length + " passage(s) - Edite le " + new Date().toLocaleDateString("fr-FR") + "</p>" +
               "<table><thead><tr><th>N°</th><th>Zone</th><th>Nuisible</th>"+DATES.map(d=>"<th>"+d.slice(0,5)+"</th>").join("")+"<th>Tendance</th></tr></thead><tbody>"+rows+"</tbody></table>"
             );
           }}
@@ -1529,13 +1661,10 @@ function Cartographie({ seuilsGlobaux }) {
           <button onClick={() => {
             const headers = ["N°","Zone","Nuisible","Tendance",...DATES];
             const rows = filtered.map(p => {
-              const dateVals = DATES.map(d => {
-                const v = p.passages[d]||"";
-                return v==="CONSOMMATION TOTALE"||v==="Totale"?"TOT":v==="CONSOMMATION PARTIELLE"||v==="25%"||v==="50%"||v==="75%"?"PAR":v||"—";
-              });
+              const dateVals = DATES.map(d => valeurExport(p, d));
               return [p.id, p.zone||"", p.nuisible||"Rongeurs", getTendance(p), ...dateVals];
             });
-            exportCSV("postes_zones_"+CLIENT_CONFIG.nom.replace(/\s+/g,"_"), headers, rows);
+            exportCSV("postes_zones_"+CLIENT_CONFIG.nom.replace(/\s+/g,"_")+"_"+anneeLabel.replace(/\s+/g,"_"), headers, rows);
           }}
             style={{ background:"#22c55e22", color:"#22c55e", border:"1px solid #22c55e44", borderRadius:9, padding:"9px 16px", fontSize:12, fontWeight:700, cursor:"pointer", fontFamily:"inherit" }}>
             Export Excel
@@ -1550,34 +1679,6 @@ function Cartographie({ seuilsGlobaux }) {
           </div>
         </div>
       </div>
-
-      {/* Seuils dynamiques */}
-      {subtab === "insectes" && (
-        <Card style={{ marginBottom: 14, padding: "12px 16px" }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: "#7a90aa", textTransform: "uppercase", marginBottom: 10 }}>Seuils dynamiques — modifiable</div>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 16 }}>
-            {Object.entries(seuilsDyn).map(([nuisible, seuils]) => (
-              <div key={nuisible} style={{ background: "#1a2540", borderRadius: 8, padding: "8px 12px", minWidth: 180 }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: NUISIBLE_COLORS[nuisible] || "#7a90aa", marginBottom: 6 }}>{nuisible}</div>
-                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                  <div>
-                    <div style={{ fontSize: 9, color: "#f59e0b", marginBottom: 2 }}>Vigilance</div>
-                    <input type="number" value={seuils.vigilance}
-                      onChange={e => setSeuilsDyn(prev => ({ ...prev, [nuisible]: { ...prev[nuisible], vigilance: parseInt(e.target.value) || 0 } }))}
-                      style={{ width: 60, background: "#243352", border: "1px solid #f59e0b44", borderRadius: 5, padding: "3px 6px", color: "#f59e0b", fontSize: 12, fontFamily: "inherit", textAlign: "center" }} />
-                  </div>
-                  <div>
-                    <div style={{ fontSize: 9, color: "#ef4444", marginBottom: 2 }}>Critique</div>
-                    <input type="number" value={seuils.critique}
-                      onChange={e => setSeuilsDyn(prev => ({ ...prev, [nuisible]: { ...prev[nuisible], critique: parseInt(e.target.value) || 0 } }))}
-                      style={{ width: 60, background: "#243352", border: "1px solid #ef444444", borderRadius: 5, padding: "3px 6px", color: "#ef4444", fontSize: 12, fontFamily: "inherit", textAlign: "center" }} />
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </Card>
-      )}
 
       {subtab === "insectes" && (
         <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 12 }}>
@@ -1603,7 +1704,14 @@ function Cartographie({ seuilsGlobaux }) {
           style={{ background: "#243352", border: "1px solid #3d5270", borderRadius: 8, padding: "8px 12px", color: "#f1f5f9", fontSize: 12, fontFamily: "inherit" }}>
           {macros.map(m => <option key={m}>{m}</option>)}
         </select>
-        <span style={{ fontSize: 12, color: "#5a7090" }}>{filtered.length} poste(s)</span>
+        {anneesDispo.length > 0 && (
+          <select value={filterAnnee || "Toutes"} onChange={e => setFilterAnnee(e.target.value)}
+            style={{ background: "#243352", border: "1px solid #3d5270", borderRadius: 8, padding: "8px 12px", color: "#f1f5f9", fontSize: 12, fontFamily: "inherit" }}>
+            <option value="Toutes">Toutes les annees</option>
+            {anneesDispo.map(a => <option key={a} value={a}>{a}</option>)}
+          </select>
+        )}
+        <span style={{ fontSize: 12, color: "#5a7090" }}>{filtered.length} poste(s) — {DATES.length} passage(s)</span>
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: displaySel ? "1fr 1fr" : "1fr", gap: 14, alignItems: "start" }}>
@@ -1625,19 +1733,16 @@ function Cartographie({ seuilsGlobaux }) {
 
               function eLabel(d) {
                 const v = p.passages[d];
+                const c = couleurSeuil(p, d);
                 if (isInsecte) {
-                  if (!v) return { l: <span style={{ color: "#22c55e" }}>—</span>, c: "#22c55e" };
-                  const num = parseFloat(v) || 0;
-                  const s = seuilsDyn[nuisible];
-                  const c = s ? (num >= s.critique ? "#ef4444" : num >= s.vigilance ? "#f59e0b" : "#22c55e") : "#22c55e";
+                  if (!v) return { l: <span style={{ color: c }}>—</span>, c };
                   return { l: <span style={{ color: c, fontWeight: 700 }}>{v}</span>, c };
                 }
-                if (v === "CONSOMMATION TOTALE") return { l: <span style={{ color: "#ef4444", fontWeight: 700 }}>TOT</span>, c: "#ef4444" };
-                if (v === "CONSOMMATION PARTIELLE") return { l: <span style={{ color: "#f59e0b", fontWeight: 700 }}>PAR</span>, c: "#f59e0b" };
-                if (v === "75%" || v === "50%" || v === "25%") return { l: <span style={{ color: "#f59e0b", fontWeight: 700 }}>{v}</span>, c: "#f59e0b" };
-                if (v === "Totale") return { l: <span style={{ color: "#ef4444", fontWeight: 700 }}>TOT</span>, c: "#ef4444" };
-                if (v && !isNaN(parseFloat(v)) && parseFloat(v) > 0) return { l: <span style={{ color: "#f59e0b", fontWeight: 700 }}>{v}</span>, c: "#f59e0b" };
-                return { l: <span style={{ color: "#22c55e" }}>—</span>, c: "#22c55e" };
+                if (v === "CONSOMMATION TOTALE" || v === "Totale") return { l: <span style={{ color: c, fontWeight: 700 }}>TOT</span>, c };
+                if (v === "CONSOMMATION PARTIELLE") return { l: <span style={{ color: c, fontWeight: 700 }}>PAR</span>, c };
+                if (v === "75%" || v === "50%" || v === "25%") return { l: <span style={{ color: c, fontWeight: 700 }}>{v}</span>, c };
+                if (v && !isNaN(parseFloat(v)) && parseFloat(v) > 0) return { l: <span style={{ color: c, fontWeight: 700 }}>{v}</span>, c };
+                return { l: <span style={{ color: c }}>—</span>, c };
               }
               return (
                 <div key={p.id} onClick={() => setSel(isD ? null : p)}
@@ -1769,10 +1874,33 @@ function Cartographie({ seuilsGlobaux }) {
         )}
       </div>
 
-      {/* Tableau seuils IPS */}
-      {subtab === "insectes" && (
+      {/* Tableau des seuils d infestation */}
+      {(
         <Card style={{ marginTop: 20 }}>
-          <div style={{ fontSize: 14, fontWeight: 700, color: "#f1f5f9", marginBottom: 12 }}>Seuils d'infestation — IPS (Insectes des denrées stockées)</div>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
+            <div style={{ fontSize: 14, fontWeight: 700, color: "#f1f5f9" }}>Seuils d'infestation</div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={() => {
+                const rows = seuilsInfestRows.map(r =>
+                  "<tr><td style='font-weight:600'>" + r[0] + "</td><td style='text-align:center;color:green;font-weight:700'>" + r[1] + "</td><td style='text-align:center;color:#d97706;font-weight:700'>" + r[2] + "</td><td style='text-align:center;color:red;font-weight:700'>" + r[3] + "</td></tr>"
+                ).join("");
+                exportHTML("Seuils d infestation - " + CLIENT_CONFIG.nom,
+                  "<h1>Seuils d infestation - " + CLIENT_CONFIG.nom + "</h1>" +
+                  "<p style='color:#7a90aa;margin-bottom:16px'>Edite le " + new Date().toLocaleDateString("fr-FR") + "</p>" +
+                  "<table><thead><tr><th>Nuisible</th><th>Leger</th><th>Moyen</th><th>Eleve</th></tr></thead><tbody>" + rows + "</tbody></table>"
+                );
+              }}
+                style={{ background: "#1d4ed822", color: "#3b82f6", border: "1px solid #3b82f644", borderRadius: 8, padding: "6px 12px", fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+                Export PDF
+              </button>
+              <button onClick={() => {
+                exportCSV("seuils_infestation_" + CLIENT_CONFIG.nom.replace(/\s+/g, "_"), ["Nuisible", "Leger", "Moyen", "Eleve"], seuilsInfestRows);
+              }}
+                style={{ background: "#22c55e22", color: "#22c55e", border: "1px solid #22c55e44", borderRadius: 8, padding: "6px 12px", fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+                Export Excel
+              </button>
+            </div>
+          </div>
           <div style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
               <thead>
@@ -1784,12 +1912,7 @@ function Cartographie({ seuilsGlobaux }) {
                 </tr>
               </thead>
               <tbody>
-                {[
-                  ["IPS (total captures)", `< ${seuilsDyn.IPS.vigilance}`, `${seuilsDyn.IPS.vigilance} - ${seuilsDyn.IPS.critique}`, `> ${seuilsDyn.IPS.critique}`],
-                  ["Teignes", `< ${seuilsDyn.Teignes.vigilance}`, `${seuilsDyn.Teignes.vigilance} - ${seuilsDyn.Teignes.critique}`, `> ${seuilsDyn.Teignes.critique}`],
-                  ["Blattes", `< ${seuilsDyn.Blattes.vigilance}`, `${seuilsDyn.Blattes.vigilance} - ${seuilsDyn.Blattes.critique}`, `> ${seuilsDyn.Blattes.critique}`],
-                  ["Insectes volants (moucherons)", `< ${seuilsDyn["Insectes volants"].vigilance}`, `${seuilsDyn["Insectes volants"].vigilance} - ${seuilsDyn["Insectes volants"].critique}`, `> ${seuilsDyn["Insectes volants"].critique}`],
-                ].map((row, i) => (
+                {seuilsInfestRows.map((row, i) => (
                   <tr key={row[0]} style={{ borderTop: "1px solid #243352", background: i % 2 === 0 ? "transparent" : "#ffffff04" }}>
                     <td style={{ padding: "7px 10px", color: "#e2e8f0", fontWeight: 600 }}>{row[0]}</td>
                     <td style={{ padding: "7px 10px", textAlign: "center", color: "#22c55e" }}>{row[1]}</td>
@@ -2646,6 +2769,38 @@ function usePersistedBool(key, defaultValue) {
 }
 function usePersistedCollapsed(key, defaultValue) { return usePersistedBool("collapsed_"+key, defaultValue); }
 
+// Persistance generique des filtres de graphiques (chaines, nombres, tableaux, booleens)
+function usePersistedValue(key, defaultValue) {
+  const storageKey = "aads_chart_" + key;
+  const [value, setValue] = React.useState(() => {
+    try {
+      const saved = window.localStorage && window.localStorage.getItem(storageKey);
+      if (saved === null || saved === undefined) return defaultValue;
+      return JSON.parse(saved);
+    } catch(_e) { return defaultValue; }
+  });
+  function update(newVal) {
+    const resolved = typeof newVal === "function" ? newVal(value) : newVal;
+    setValue(resolved);
+    try { window.localStorage && window.localStorage.setItem(storageKey, JSON.stringify(resolved)); } catch(_e) { return; }
+  }
+  return [value, update];
+}
+// Annee en cours, defaut des filtres annee
+const ANNEE_COURANTE = String(new Date().getFullYear());
+// Defaut des filtres annee : annee en cours si elle contient des donnees, sinon Toutes
+function anneeDefaut(liste, champ) {
+  const champs = Array.isArray(champ) ? champ : [champ || "date"];
+  const present = (liste||[]).some(x => champs.some(f => {
+    const v = (x||{})[f];
+    if (!v) return false;
+    const p = String(v).split("/");
+    const d = p.length === 3 ? new Date(p[2]+"-"+p[1]+"-"+p[0]) : new Date(v);
+    return d && !isNaN(d) && String(d.getFullYear()) === ANNEE_COURANTE;
+  }));
+  return present ? ANNEE_COURANTE : "Toutes";
+}
+
 function exportChartCard(titleText, innerHtml) {
   exportHTML(titleText + " - " + CLIENT_CONFIG.nom,
     "<h1>" + titleText + "</h1>" +
@@ -2682,7 +2837,7 @@ function ChartExportBtn({ onClick }) {
   );
 }
 
-function PieChart({ data, title, subtitle, chartKey }) {
+function PieChart({ data, title, subtitle, chartKey, filtersJsx }) {
   const key = chartKey || title.replace(/[^a-zA-Z0-9]/g,"_");
   const [collapsed, setCollapsed] = usePersistedCollapsed(key, false);
   const [fullscreen, setFullscreen] = useState(false);
@@ -2761,6 +2916,7 @@ function PieChart({ data, title, subtitle, chartKey }) {
                 <button onClick={()=>setFullscreen(false)} style={{background:"#ef444422",color:"#ef4444",border:"1px solid #ef444444",borderRadius:6,padding:"4px 10px",fontSize:10,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>X Fermer</button>
               </div>
             </div>
+            {filtersJsx}
             {bodyJsx}
           </Card>
         </div>
@@ -2783,6 +2939,7 @@ function PieChart({ data, title, subtitle, chartKey }) {
           <ChartExportBtn onClick={exportThisChart}/>
         </div>
       </div>
+      {filtersJsx}
       {bodyJsx}
     </Card>
     )}
@@ -2849,32 +3006,52 @@ function DeivEvolutionChart({ passages, anneeRef }) {
   );
 }
 
-function ReinterPassagesChart({ passages, reinterventions, anneeRef }) {
+function ReinterPassagesChart({ passages, reinterventions }) {
   const pd=d=>{const p=(d||"").split("/");return p.length===3?new Date(p[2]+"-"+p[1]+"-"+p[0]):new Date(0);};
+  function anneeDe(x){ const p=((x||{}).date||"").split("/"); if(p.length!==3) return null; const y=parseInt(p[2]); return isNaN(y)?null:y; }
+  const tousEvts=(passages||[]).concat(reinterventions||[]);
+  const annees=[...new Set(tousEvts.map(anneeDe).filter(Boolean))].sort((a,b)=>a-b);
+  const [filterAnnee, setFilterAnnee] = usePersistedValue("ReinterPassages_filterAnnee", anneeDefaut(tousEvts));
+  const anneeActive = (filterAnnee && filterAnnee!=="Toutes") ? parseInt(filterAnnee) : null;
+  function garde(x){ const a=anneeDe(x); if(a===null) return false; return anneeActive===null || a===anneeActive; }
+  const passagesF=(passages||[]).filter(garde);
+  const reinterF=(reinterventions||[]).filter(garde);
   const byMois={};
-  passages.forEach(p=>{const d=pd(p.date);if(!d||d.getFullYear()!==anneeRef)return;const m=d.getMonth();if(!byMois[m])byMois[m]={passages:0,reinter:0};byMois[m].passages++;});
-  reinterventions.forEach(r=>{const d=pd(r.date);if(!d||d.getFullYear()!==anneeRef)return;const m=d.getMonth();if(!byMois[m])byMois[m]={passages:0,reinter:0};byMois[m].reinter++;});
+  passagesF.forEach(p=>{const m=pd(p.date).getMonth();if(!byMois[m])byMois[m]={passages:0,reinter:0};byMois[m].passages++;});
+  reinterF.forEach(r=>{const m=pd(r.date).getMonth();if(!byMois[m])byMois[m]={passages:0,reinter:0};byMois[m].reinter++;});
   const moisDispo=Object.keys(byMois).map(Number).sort((a,b)=>a-b);
-  if(moisDispo.length===0)return null;
+  if(annees.length===0)return null;
+  const anneeLabel = anneeActive===null ? "Toutes années" : String(anneeActive);
+  const inpStyleRp={ background:"#243352", border:"1px solid #3d5270", borderRadius:7, padding:"4px 8px", color:"#f1f5f9", fontSize:11, fontFamily:"inherit" };
   const MOIS=["Jan.","Fév","Mar","Avr","Mai","Jun","Jul","Aoû","Sep","Oct","Nov","Dec"];
-  const totalP=passages.length, totalR=reinterventions.length, total=totalP+totalR;
+  const totalP=passagesF.length, totalR=reinterF.length, total=totalP+totalR;
   const tauxR=total>0?Math.round(totalR/total*100):0;
   const maxVal=Math.max(...moisDispo.map(m=>byMois[m].passages+byMois[m].reinter),1);
+  const vide = moisDispo.length===0;
   const W=600,H=200,PAD=40;
-  const bw=Math.min(40,(W-PAD*2)/moisDispo.length*0.35);
+  const bw=moisDispo.length>0?Math.min(40,(W-PAD*2)/moisDispo.length*0.35):20;
   return (
     <Card style={{marginBottom:16}}>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12,flexWrap:"wrap",gap:8}}>
-        <div style={{fontSize:13,fontWeight:700,color:"#f1f5f9"}}>Passages vs Réinterventions - {anneeRef}</div>
+        <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+          <div style={{fontSize:13,fontWeight:700,color:"#f1f5f9"}}>Passages vs Réinterventions - {anneeLabel}</div>
+          <select value={filterAnnee} onChange={e=>setFilterAnnee(e.target.value)} style={inpStyleRp}>
+            <option value="Toutes">Toutes années</option>
+            {annees.map(a=><option key={a} value={a}>{a}</option>)}
+          </select>
+        </div>
         <div style={{display:"flex",gap:10,alignItems:"center"}}>
           {[["#3b82f6",totalP,"Passages"],["#ef4444",totalR,"Reinter."],[(tauxR>20?"#ef4444":tauxR>10?"#f59e0b":"#22c55e"),tauxR+"%","Taux reinter."]].map(([c,v,l])=>(<div key={l} style={{textAlign:"center",background:"#243352",borderRadius:8,padding:"5px 12px"}}><div style={{fontSize:16,fontWeight:900,color:c}}>{v}</div><div style={{fontSize:9,color:"#7a90aa"}}>{l}</div></div>))}
           <ChartExportBtn onClick={(svgString)=>{
             const rows = moisDispo.map(m=>"<tr><td style='padding:5px 8px;border:1px solid #e5e7eb'>"+MOIS[m]+"</td><td style='padding:5px 8px;border:1px solid #e5e7eb;text-align:center;color:#3b82f6;font-weight:700'>"+byMois[m].passages+"</td><td style='padding:5px 8px;border:1px solid #e5e7eb;text-align:center;color:#ef4444;font-weight:700'>"+byMois[m].reinter+"</td></tr>").join("");
             const svgHtml = svgString ? "<div style='margin-bottom:20px'>"+svgString+"</div>" : "";
-            exportChartCard("Passages vs Réinterventions "+anneeRef, svgHtml+"<table style='width:100%;border-collapse:collapse'><thead><tr><th style='padding:5px 8px;border:1px solid #e5e7eb'>Mois</th><th style='padding:5px 8px;border:1px solid #e5e7eb'>Passages</th><th style='padding:5px 8px;border:1px solid #e5e7eb'>Réinterventions</th></tr></thead><tbody>"+rows+"</tbody></table><p style='margin-top:12px'>Total passages: <strong>"+totalP+"</strong> - Total reinterventions: <strong>"+totalR+"</strong> - Taux: <strong>"+tauxR+"%</strong></p>");
+            exportChartCard("Passages vs Réinterventions "+anneeLabel, svgHtml+"<table style='width:100%;border-collapse:collapse'><thead><tr><th style='padding:5px 8px;border:1px solid #e5e7eb'>Mois</th><th style='padding:5px 8px;border:1px solid #e5e7eb'>Passages</th><th style='padding:5px 8px;border:1px solid #e5e7eb'>Réinterventions</th></tr></thead><tbody>"+rows+"</tbody></table><p style='margin-top:12px'>Total passages: <strong>"+totalP+"</strong> - Total reinterventions: <strong>"+totalR+"</strong> - Taux: <strong>"+tauxR+"%</strong></p>");
           }}/>
         </div>
       </div>
+      {vide ? (
+        <div style={{textAlign:"center",color:"#5a7090",padding:30,fontSize:12}}>Aucun passage ni réintervention pour cette année.</div>
+      ) : (<>
       <div style={{display:"flex",gap:14,marginBottom:8}}>
         {[["#3b82f6","Passages"],["#ef4444","Réinterventions"]].map(([c,l])=>(<div key={l} style={{display:"flex",alignItems:"center",gap:4}}><span style={{width:12,height:12,background:c,borderRadius:2,display:"inline-block"}}/><span style={{fontSize:10,color:"#7a90aa"}}>{l}</span></div>))}
       </div>
@@ -2889,6 +3066,7 @@ function ReinterPassagesChart({ passages, reinterventions, anneeRef }) {
           })}
         </svg>
       </div>
+      </>)}
     </Card>
   );
 }
@@ -2899,7 +3077,7 @@ function Top10PostesChart({ passages, postes }) {
     try { const saved = window.localStorage && window.localStorage.getItem("aads_chart_Top10_hiddenList"); return saved ? JSON.parse(saved) : []; } catch(e) { return []; }
   });
   const [collapsed, setCollapsed] = usePersistedCollapsed("Top10", false);
-  const [filterAnnee, setFilterAnnee] = useState("Toutes");
+  const [filterAnnee, setFilterAnnee] = usePersistedValue("Top10Postes_filterAnnee", anneeDefaut(passages));
 
   function toggleNuisible(n) {
     setHiddenList(prev => {
@@ -3152,30 +3330,39 @@ function PassagesParAnneeChart({ passages, reinterventions }) {
   );
 }
 
-function PlanActionsPieChart({ actions, selectedAnnees, filterAnnee }) {
+function PlanActionsPieChart({ actions }) {
   const STATUTS=["En cours","Planifiee","Résolue","Vigilance"];
   const SCOL={"En cours":"#f59e0b","Planifiee":"#3b82f6","Résolue":"#22c55e","Vigilance":"#ef4444"};
-  const SLABELS={"En cours":"En cours","Planifiee":"Planifiee","Résolue":"Résolue","Vigilance":"Vigilance"};
-  const actionsFiltered=actions.filter(a=>{
-    const det=a.date_detection||a.dateDetection||"";
-    if(!det)return true;
-    const parts=det.split("/");
-    const year=parts.length===3?parseInt(parts[2]):new Date(det).getFullYear();
-    if(selectedAnnees&&selectedAnnees.length>0)return selectedAnnees.includes(year);
-    if(filterAnnee&&filterAnnee!=="Toutes")return year===parseInt(filterAnnee);
+  const [filterAnnee, setFilterAnnee] = usePersistedValue("PlanActionsPie_filterAnnee", anneeDefaut(actions, ["date_detection","dateDetection"]));
+  function anneeDe(a){ const det=a.date_detection||a.dateDetection||""; if(!det) return null; const parts=String(det).split("/"); const y = parts.length===3?parseInt(parts[2]):new Date(det).getFullYear(); return isNaN(y)?null:y; }
+  const annees=[...new Set((actions||[]).map(anneeDe).filter(Boolean))].sort((a,b)=>a-b);
+  const actionsFiltered=(actions||[]).filter(a=>{
+    const y=anneeDe(a);
+    if(y===null)return true;
+    if(filterAnnee&&filterAnnee!=="Toutes")return y===parseInt(filterAnnee);
     return true;
   });
   const counts={};
   actionsFiltered.forEach(a=>{
     const s=a.statut||"";
-    // Normalize statut
     const key=STATUTS.find(k=>s.toLowerCase().includes(k.toLowerCase().replace("e","").substring(0,4)))||s;
     counts[key]=(counts[key]||0)+1;
   });
-  const total=actionsFiltered.length;
   const data=Object.entries(counts).filter(([,c])=>c>0).map(([s,c])=>({label:s,value:c,color:SCOL[s]||"#7a90aa"}));
-  const anneeLabel=selectedAnnees&&selectedAnnees.length>0?selectedAnnees.join(", "):filterAnnee&&filterAnnee!=="Toutes"?filterAnnee:"Toutes années";
-  return <PieChart data={data} title={"Plan d'actions — Répartition par statut"} subtitle={anneeLabel} chartKey="PlanActions"/>;
+  const anneeLabel=filterAnnee&&filterAnnee!=="Toutes"?filterAnnee:"Toutes années";
+  const inpStylePac={ background:"#243352", border:"1px solid #3d5270", borderRadius:7, padding:"6px 10px", color:"#f1f5f9", fontSize:11, fontFamily:"inherit" };
+  const filtersJsx=(
+    <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"flex-end",marginBottom:12,paddingBottom:12,borderBottom:"1px solid #243352"}}>
+      <div>
+        <label style={{fontSize:9,color:"#7a90aa",display:"block",marginBottom:3}}>Année</label>
+        <select value={filterAnnee} onChange={e=>setFilterAnnee(e.target.value)} style={inpStylePac}>
+          <option value="Toutes">Toutes années</option>
+          {annees.map(a=><option key={a} value={a}>{a}</option>)}
+        </select>
+      </div>
+    </div>
+  );
+  return <PieChart data={data} title={"Plan d'actions — Répartition par statut"} subtitle={anneeLabel} chartKey="PlanActions" filtersJsx={filtersJsx}/>;
 }
 
 function PostesNuisiblePieChart({ postes }) {
@@ -3222,16 +3409,18 @@ function StatutGraph({ passagesFiltres }) {
 }
 
 function TauxActiviteChart({ passages, postes }) {
-  const [typeFilter, setTypeFilter] = useState("tous"); // tous | RE | RI
-  const [filterAnnee, setFilterAnnee] = useState("Toutes");
-  const [selectedAnnees, setSelectedAnnees] = useState([]);
-  const [filterTrimestre, setFilterTrimestre] = useState("Tous");
-  const [filterMois, setFilterMois] = useState("Tous");
+  const [typeFilter, setTypeFilter] = usePersistedValue("TauxActivite_typeFilter", "tous"); // tous | RE | RI
+  const [filterAnnee, setFilterAnnee] = usePersistedValue("TauxActivite_filterAnnee", anneeDefaut(passages));
+  const [selectedAnnees, setSelectedAnnees] = usePersistedValue("TauxActivite_selectedAnnees", []);
+  const [filterTrimestre, setFilterTrimestre] = usePersistedValue("TauxActivite_filterTrimestre", "Tous");
+  const [filterMois, setFilterMois] = usePersistedValue("TauxActivite_filterMois", "Tous");
   const [showSeuils, setShowSeuils] = usePersistedBool("TauxActivite_showSeuils", true);
-  const [showStatutGraph, setShowStatutGraph] = useState(false);
+  const [showStatutGraph, setShowStatutGraph] = usePersistedValue("TauxActivite_showStatutGraph", false);
   const [fullscreen, setFullscreen] = useState(false);
   const [collapsed, setCollapsed] = usePersistedCollapsed("TauxActivite", false);
   const [seuilsRongeurs, setSeuilsRongeurs] = useState({ taux_vigilance: CLIENT_CONFIG.seuil_vigilance||5, taux_critique: CLIENT_CONFIG.seuil_critique||10 });
+  const [echelle, setEchelle] = usePersistedValue("TauxActivite_echelle", "auto"); // auto | manuel | plein
+  const [maxManuel, setMaxManuel] = usePersistedValue("TauxActivite_maxManuel", 20);
 
   useEffect(() => {
     sbGet("seuils").then(data => {
@@ -3291,38 +3480,81 @@ function TauxActiviteChart({ passages, postes }) {
   const stats = passagesFiltres.map(getStats);
 
   const ANNEE_COLORS = ["#3b82f6","#22c55e","#f59e0b","#ef4444","#8b5cf6","#06b6d4"];
-  const anneesAffichees = selectedAnnees.length > 0 ? selectedAnnees.sort() : (filterAnnee !== "Toutes" ? [parseInt(filterAnnee)] : []);
+
+  // Regroupement par mois : plusieurs passages dans le meme mois sont moyennes
+  function statsParMois(list) {
+    const parMois = {};
+    list.forEach(s => {
+      const d = pd(s.date);
+      if (!d || isNaN(d)) return;
+      const m = d.getMonth();
+      if (!parMois[m]) parMois[m] = [];
+      parMois[m].push(s);
+    });
+    return Object.keys(parMois).map(m => {
+      const arr = parMois[m];
+      return {
+        mois: parseInt(m),
+        date: arr[0].date,
+        tauxActivite: Math.round(arr.reduce((a,x)=>a+x.tauxActivite,0)/arr.length),
+        actifs: arr.reduce((a,x)=>a+x.actifs,0),
+        total: arr.reduce((a,x)=>a+x.total,0),
+        nb: arr.length,
+      };
+    }).sort((a,b)=>a.mois-b.mois);
+  }
+
+  const anneesAffichees = selectedAnnees.length > 0 ? [...selectedAnnees].sort() : (filterAnnee !== "Toutes" ? [parseInt(filterAnnee)] : annees);
   const statsParAnnee = anneesAffichees.map((annee, idx) => ({
     annee, color: ANNEE_COLORS[idx % ANNEE_COLORS.length],
-    stats: filterPassagesByPeriode(passages, String(annee)).map(getStats),
+    stats: statsParMois(filterPassagesByPeriode(passages, String(annee)).map(getStats)),
   }));
 
   const seuils = { vigilance: seuilsRongeurs.taux_vigilance, critique: seuilsRongeurs.taux_critique };
+
+  // Echelle verticale : auto (ajustee aux donnees) | manuel | plein (0-100%)
+  const valeursY = statsParAnnee.reduce((acc,sa)=>acc.concat(sa.stats.map(x=>x.tauxActivite)), []).concat(stats.map(x=>x.tauxActivite));
+  const maxDonnees = Math.max(...valeursY, showSeuils ? seuils.critique : 0, 1);
+  const maxAuto = Math.min(100, Math.max(5, Math.ceil(maxDonnees*1.25/5)*5));
+  const maxY = echelle === "plein" ? 100 : echelle === "manuel" ? Math.max(1, parseInt(maxManuel)||100) : maxAuto;
+  const graduations = [0, 0.25, 0.5, 0.75, 1].map(f => Math.round(maxY*f));
+
   const W = fullscreen ? 1100 : 700, H = fullscreen ? 420 : 260, PAD = 50;
   function xPos(i) { return PAD + (stats.length > 1 ? i/(stats.length-1)*(W-PAD*2) : (W-PAD*2)/2); }
-  function yTaux(v) { return H - PAD - (v/100)*(H-PAD*2); }
+  function yTaux(v) { return H - PAD - (Math.min(v, maxY)/maxY)*(H-PAD*2); }
+  function xMois(m) { return PAD + (m/11)*(W-PAD*2); }
   const yVigilance = yTaux(seuils.vigilance);
   const yCritique = yTaux(seuils.critique);
   const inpStyle = { background:"#243352", border:"1px solid #3d5270", borderRadius:7, padding:"6px 10px", color:"#f1f5f9", fontSize:11, fontFamily:"inherit" };
 
   function exportThisChart() {
     const W2=W, H2=H, PAD2=PAD;
-    const ptsData = stats.map((s,i)=>({ x: stats.length>1 ? PAD2+i/(stats.length-1)*(W2-PAD2*2) : W2/2, y: H2-PAD2-(s.tauxActivite/100)*(H2-PAD2*2), s }));
-    const polylinePts = ptsData.map(p=>p.x+","+p.y).join(" ");
-    const yVig2 = H2-PAD2-(seuils.vigilance/100)*(H2-PAD2*2);
-    const yCrit2 = H2-PAD2-(seuils.critique/100)*(H2-PAD2*2);
+    const xM = m => PAD2 + (m/11)*(W2-PAD2*2);
+    const yT = v => H2-PAD2-(Math.min(v,maxY)/maxY)*(H2-PAD2*2);
+    const moisSvg = MOIS_LABELS.map(function(lbl,m){ return "<text x='"+xM(m)+"' y='"+(H2-8)+"' font-size='8' fill='#6b7280' text-anchor='middle'>"+lbl+"</text>"; }).join("");
+    const yVig2 = yT(seuils.vigilance);
+    const yCrit2 = yT(seuils.critique);
     const seuilsSvg = showSeuils ? "<line x1='"+PAD2+"' x2='"+(W2-PAD2)+"' y1='"+yVig2+"' y2='"+yVig2+"' stroke='orange' stroke-dasharray='5,3' stroke-width='1.5'/><text x='"+(W2-PAD2+4)+"' y='"+(yVig2+4)+"' font-size='9' fill='orange'>Vig.</text><line x1='"+PAD2+"' x2='"+(W2-PAD2)+"' y1='"+yCrit2+"' y2='"+yCrit2+"' stroke='red' stroke-dasharray='5,3' stroke-width='1.5'/><text x='"+(W2-PAD2+4)+"' y='"+(yCrit2+4)+"' font-size='9' fill='red'>Crit.</text>" : "";
-    const circlesSvg = ptsData.map(function(p){ return "<circle cx='"+p.x+"' cy='"+p.y+"' r='4' fill='"+(p.s.tauxActivite>=seuils.critique?"red":p.s.tauxActivite>=seuils.vigilance?"orange":"#22c55e")+"'/><text x='"+p.x+"' y='"+(p.y-8)+"' font-size='9' fill='#374151' text-anchor='middle'>"+p.s.tauxActivite+"%</text><text x='"+p.x+"' y='"+(H2-8)+"' font-size='8' fill='#6b7280' text-anchor='middle'>"+p.s.date.slice(0,5)+"</text>"; }).join("");
-    const svgTaux = "<svg width='"+W2+"' height='"+H2+"' xmlns='http://www.w3.org/2000/svg' style='background:#f9fafb;border-radius:8px;border:1px solid #e5e7eb'>"+seuilsSvg+"<polyline points='"+polylinePts+"' fill='none' stroke='#1d4ed8' stroke-width='2'/>"+circlesSvg+"</svg>";
+    const seriesSvg = statsParAnnee.map(function(sa){
+      if (sa.stats.length < 1) return "";
+      const poly = sa.stats.map(function(x){ return xM(x.mois)+","+yT(x.tauxActivite); }).join(" ");
+      const ligne = sa.stats.length>1 ? "<polyline points='"+poly+"' fill='none' stroke='"+sa.color+"' stroke-width='2'/>" : "";
+      const pts = sa.stats.map(function(x){ return "<circle cx='"+xM(x.mois)+"' cy='"+yT(x.tauxActivite)+"' r='3.5' fill='"+sa.color+"'/><text x='"+xM(x.mois)+"' y='"+(yT(x.tauxActivite)-8)+"' font-size='8' fill='"+sa.color+"' text-anchor='middle'>"+x.tauxActivite+"%</text>"; }).join("");
+      return ligne + pts;
+    }).join("");
+    const legendeSvg = statsParAnnee.map(function(sa,i){ return "<line x1='"+(PAD2+i*70)+"' x2='"+(PAD2+i*70+20)+"' y1='14' y2='14' stroke='"+sa.color+"' stroke-width='3'/><text x='"+(PAD2+i*70+25)+"' y='18' font-size='10' fill='"+sa.color+"'>"+sa.annee+"</text>"; }).join("");
+    const svgTaux = "<svg width='"+W2+"' height='"+H2+"' xmlns='http://www.w3.org/2000/svg' style='background:#f9fafb;border-radius:8px;border:1px solid #e5e7eb'>"+seuilsSvg+moisSvg+seriesSvg+legendeSvg+"</svg>";
 
     const typeLabel = typeFilter==="RE"?"Rongeurs exterieurs":typeFilter==="RI"?"Rongeurs interieurs":"Tous rongeurs";
-    const rows = stats.map(s=>"<tr><td>"+s.date+"</td><td style='font-weight:700'>"+s.tauxActivite+"%</td><td>"+s.actifs+"/"+s.total+"</td></tr>").join("");
+    const rows = statsParAnnee.map(function(sa){
+      return sa.stats.map(function(x){ return "<tr><td>"+MOIS_LABELS[x.mois]+" "+sa.annee+"</td><td style='font-weight:700'>"+x.tauxActivite+"%</td><td>"+x.actifs+"/"+x.total+"</td></tr>"; }).join("");
+    }).join("");
 
     exportHTML("Taux activite rongeurs - "+CLIENT_CONFIG.nom,
       "<h1>Taux d'activité - "+typeLabel+"</h1>"+
       "<p style='color:#6b7280;margin-bottom:16px'>"+CLIENT_CONFIG.nom+" - "+new Date().toLocaleDateString("fr-FR")+"</p>"+
       svgTaux+
-      "<table style='width:100%;border-collapse:collapse;margin-top:16px'><thead><tr><th>Date</th><th>Taux</th><th>Postes actifs</th></tr></thead><tbody>"+rows+"</tbody></table>"
+      "<table style='width:100%;border-collapse:collapse;margin-top:16px'><thead><tr><th>Mois</th><th>Taux</th><th>Postes actifs</th></tr></thead><tbody>"+rows+"</tbody></table>"
     );
   }
 
@@ -3378,11 +3610,22 @@ function TauxActiviteChart({ passages, postes }) {
                   {MOIS_LABELS.map((m,i)=><option key={i} value={i}>{m}</option>)}
                 </select>
               </div>
+              <div>
+                <label style={{fontSize:9,color:"#7a90aa",display:"block",marginBottom:3}}>Echelle Y</label>
+                <div style={{display:"flex",gap:4,alignItems:"center"}}>
+                  <select value={echelle} onChange={e=>setEchelle(e.target.value)} style={inpStyle}>
+                    <option value="auto">Auto</option>
+                    <option value="manuel">Manuel</option>
+                    <option value="plein">0-100%</option>
+                  </select>
+                  {echelle==="manuel" && <input type="number" min="1" max="100" value={maxManuel} onChange={e=>setMaxManuel(e.target.value)} style={{...inpStyle,width:60}}/>}
+                </div>
+              </div>
               <button onClick={()=>setShowSeuils(v=>!v)}
                 style={{background:showSeuils?"#243352":"transparent",color:showSeuils?"#f1f5f9":"#7a90aa",border:"1px solid "+(showSeuils?"#5a7090":"#3d5270"),borderRadius:7,padding:"6px 12px",fontSize:11,fontWeight:600,cursor:"pointer",fontFamily:"inherit"}}>
                 {showSeuils?"Masquer":"Afficher"} seuils
               </button>
-              <button onClick={()=>{setTypeFilter("tous");setFilterAnnee("Toutes");setSelectedAnnees([]);setFilterTrimestre("Tous");setFilterMois("Tous");setShowSeuils(true);}}
+              <button onClick={()=>{setTypeFilter("tous");setFilterAnnee("Toutes");setSelectedAnnees([]);setFilterTrimestre("Tous");setFilterMois("Tous");setShowSeuils(true);setEchelle("auto");}}
                 style={{background:"transparent",color:"#7a90aa",border:"1px solid #3d5270",borderRadius:7,padding:"6px 12px",fontSize:11,cursor:"pointer",fontFamily:"inherit"}}>
                 Reset
               </button>
@@ -3396,19 +3639,20 @@ function TauxActiviteChart({ passages, postes }) {
               <>
               <div style={{overflowX:"auto"}}>
                 <svg viewBox={"0 0 "+W+" "+H} style={{width:"100%",maxWidth:W,display:"block"}}>
-                  {[0,25,50,75,100].map(v=>(<g key={v}><line x1={PAD} x2={W-PAD} y1={yTaux(v)} y2={yTaux(v)} stroke="#2d3f62" strokeWidth="1"/><text x={PAD-4} y={yTaux(v)+4} fontSize="9" fill="#5a7090" textAnchor="end">{v}%</text></g>))}
+                  {graduations.map(v=>(<g key={v}><line x1={PAD} x2={W-PAD} y1={yTaux(v)} y2={yTaux(v)} stroke="#2d3f62" strokeWidth="1"/><text x={PAD-4} y={yTaux(v)+4} fontSize="9" fill="#5a7090" textAnchor="end">{v}%</text></g>))}
                   {showSeuils && (<>
                     <line x1={PAD} x2={W-PAD} y1={yVigilance} y2={yVigilance} stroke="#f59e0b" strokeDasharray="5,3" strokeWidth="1.5"/>
                     <text x={W-PAD+4} y={yVigilance+4} fontSize="9" fill="#f59e0b">Vig.</text>
                     <line x1={PAD} x2={W-PAD} y1={yCritique} y2={yCritique} stroke="#ef4444" strokeDasharray="5,3" strokeWidth="1.5"/>
                     <text x={W-PAD+4} y={yCritique+4} fontSize="9" fill="#ef4444">Crit.</text>
                   </>)}
-                  {statsParAnnee.length > 1 ? statsParAnnee.map((sa,ai)=>{
+                  {MOIS_LABELS.map((lbl,m)=>(<text key={m} x={xMois(m)} y={H-8} fontSize="8" fill="#5a7090" textAnchor="middle">{lbl}</text>))}
+                  {statsParAnnee.length > 0 ? statsParAnnee.map((sa)=>{
                     if(sa.stats.length < 1) return null;
-                    const poly = sa.stats.map((s,i)=>{ const x=sa.stats.length>1?PAD+i/(sa.stats.length-1)*(W-PAD*2):W/2; return x+","+yTaux(s.tauxActivite); }).join(" ");
+                    const poly = sa.stats.map(s=>xMois(s.mois)+","+yTaux(s.tauxActivite)).join(" ");
                     return (<g key={sa.annee}>
-                      {sa.stats.length>1&&<polyline points={poly} fill="none" stroke={sa.color} strokeWidth="2.5" strokeDasharray={ai>0?"6,3":""} strokeLinejoin="round"/>}
-                      {sa.stats.map((s,i)=>{ const x=sa.stats.length>1?PAD+i/(sa.stats.length-1)*(W-PAD*2):W/2; return (<g key={i}><circle cx={x} cy={yTaux(s.tauxActivite)} r="4" fill={sa.color} stroke="#1a2540" strokeWidth="2"/><text x={x} y={yTaux(s.tauxActivite)-9} fontSize="8" fill={sa.color} textAnchor="middle">{s.tauxActivite}%</text>{ai===0&&<text x={x} y={H-8} fontSize="8" fill="#5a7090" textAnchor="middle" transform={"rotate(-30 "+x+" "+(H-8)+")"}>{(s.date||"").slice(0,5)}</text>}</g>); })}
+                      {sa.stats.length>1&&<polyline points={poly} fill="none" stroke={sa.color} strokeWidth="2.5" strokeLinejoin="round"/>}
+                      {sa.stats.map((s,i)=>(<g key={i}><circle cx={xMois(s.mois)} cy={yTaux(s.tauxActivite)} r="4" fill={sa.color} stroke="#1a2540" strokeWidth="2"/><text x={xMois(s.mois)} y={yTaux(s.tauxActivite)-9} fontSize="8" fill={sa.color} textAnchor="middle">{s.tauxActivite}%</text></g>))}
                     </g>);
                   }) : (<g>
                     {stats.length>1&&<polyline points={stats.map((s,i)=>xPos(i)+","+yTaux(s.tauxActivite)).join(" ")} fill="none" stroke="#3b82f6" strokeWidth="2.5" strokeLinejoin="round"/>}
@@ -3416,7 +3660,7 @@ function TauxActiviteChart({ passages, postes }) {
                   </g>)}
                 </svg>
               </div>
-              {statsParAnnee.length > 1 && (<div style={{display:"flex",gap:16,marginTop:10,flexWrap:"wrap"}}>{statsParAnnee.map((sa,i)=>(<div key={sa.annee} style={{display:"flex",alignItems:"center",gap:5}}><svg width="24" height="4"><line x1="0" y1="2" x2="24" y2="2" stroke={sa.color} strokeWidth="2.5" strokeDasharray={i>0?"6,3":"none"}/></svg><span style={{fontSize:11,color:sa.color,fontWeight:700}}>{sa.annee}</span></div>))}</div>)}
+              {statsParAnnee.length > 0 && (<div style={{display:"flex",gap:16,marginTop:10,flexWrap:"wrap"}}>{statsParAnnee.map((sa,i)=>(<div key={sa.annee} style={{display:"flex",alignItems:"center",gap:5}}><svg width="24" height="4"><line x1="0" y1="2" x2="24" y2="2" stroke={sa.color} strokeWidth="2.5"/></svg><span style={{fontSize:11,color:sa.color,fontWeight:700}}>{sa.annee}</span></div>))}</div>)}
               <div style={{display:"flex",alignItems:"center",gap:10,marginTop:10}}>
                 <button onClick={()=>setShowStatutGraph(v=>!v)} style={{background:showStatutGraph?"#243352":"transparent",color:showStatutGraph?"#f1f5f9":"#7a90aa",border:"1px solid "+(showStatutGraph?"#5a7090":"#3d5270"),borderRadius:7,padding:"5px 12px",fontSize:11,fontWeight:600,cursor:"pointer",fontFamily:"inherit"}}>{showStatutGraph?"Masquer":"Afficher"} Disparu/Inaccessible/Abime</button>
               </div>
@@ -3482,11 +3726,22 @@ function TauxActiviteChart({ passages, postes }) {
             {MOIS_LABELS.map((m,i)=><option key={i} value={i}>{m}</option>)}
           </select>
         </div>
+        <div>
+          <label style={{fontSize:9,color:"#7a90aa",display:"block",marginBottom:3}}>Echelle Y</label>
+          <div style={{display:"flex",gap:4,alignItems:"center"}}>
+            <select value={echelle} onChange={e=>setEchelle(e.target.value)} style={inpStyle}>
+              <option value="auto">Auto</option>
+              <option value="manuel">Manuel</option>
+              <option value="plein">0-100%</option>
+            </select>
+            {echelle==="manuel" && <input type="number" min="1" max="100" value={maxManuel} onChange={e=>setMaxManuel(e.target.value)} style={{...inpStyle,width:60}}/>}
+          </div>
+        </div>
         <button onClick={()=>setShowSeuils(v=>!v)}
           style={{background:showSeuils?"#243352":"transparent",color:showSeuils?"#f1f5f9":"#7a90aa",border:"1px solid "+(showSeuils?"#5a7090":"#3d5270"),borderRadius:7,padding:"6px 12px",fontSize:11,fontWeight:600,cursor:"pointer",fontFamily:"inherit"}}>
           {showSeuils?"Masquer":"Afficher"} seuils
         </button>
-        <button onClick={()=>{setTypeFilter("tous");setFilterAnnee("Toutes");setSelectedAnnees([]);setFilterTrimestre("Tous");setFilterMois("Tous");setShowSeuils(true);}}
+        <button onClick={()=>{setTypeFilter("tous");setFilterAnnee("Toutes");setSelectedAnnees([]);setFilterTrimestre("Tous");setFilterMois("Tous");setShowSeuils(true);setEchelle("auto");}}
           style={{background:"transparent",color:"#7a90aa",border:"1px solid #3d5270",borderRadius:7,padding:"6px 12px",fontSize:11,cursor:"pointer",fontFamily:"inherit"}}>
           Reset
         </button>
@@ -3500,19 +3755,20 @@ function TauxActiviteChart({ passages, postes }) {
         <>
         <div style={{overflowX:"auto"}}>
           <svg viewBox={"0 0 "+W+" "+H} style={{width:"100%",maxWidth:W,display:"block"}}>
-            {[0,25,50,75,100].map(v=>(<g key={v}><line x1={PAD} x2={W-PAD} y1={yTaux(v)} y2={yTaux(v)} stroke="#2d3f62" strokeWidth="1"/><text x={PAD-4} y={yTaux(v)+4} fontSize="9" fill="#5a7090" textAnchor="end">{v}%</text></g>))}
+            {graduations.map(v=>(<g key={v}><line x1={PAD} x2={W-PAD} y1={yTaux(v)} y2={yTaux(v)} stroke="#2d3f62" strokeWidth="1"/><text x={PAD-4} y={yTaux(v)+4} fontSize="9" fill="#5a7090" textAnchor="end">{v}%</text></g>))}
             {showSeuils && (<>
               <line x1={PAD} x2={W-PAD} y1={yVigilance} y2={yVigilance} stroke="#f59e0b" strokeDasharray="5,3" strokeWidth="1.5"/>
               <text x={W-PAD+4} y={yVigilance+4} fontSize="9" fill="#f59e0b">Vig.</text>
               <line x1={PAD} x2={W-PAD} y1={yCritique} y2={yCritique} stroke="#ef4444" strokeDasharray="5,3" strokeWidth="1.5"/>
               <text x={W-PAD+4} y={yCritique+4} fontSize="9" fill="#ef4444">Crit.</text>
             </>)}
-            {statsParAnnee.length > 1 ? statsParAnnee.map((sa,ai)=>{
+            {MOIS_LABELS.map((lbl,m)=>(<text key={m} x={xMois(m)} y={H-8} fontSize="8" fill="#5a7090" textAnchor="middle">{lbl}</text>))}
+            {statsParAnnee.length > 0 ? statsParAnnee.map((sa)=>{
               if(sa.stats.length < 1) return null;
-              const poly = sa.stats.map((s,i)=>{ const x=sa.stats.length>1?PAD+i/(sa.stats.length-1)*(W-PAD*2):W/2; return x+","+yTaux(s.tauxActivite); }).join(" ");
+              const poly = sa.stats.map(s=>xMois(s.mois)+","+yTaux(s.tauxActivite)).join(" ");
               return (<g key={sa.annee}>
-                {sa.stats.length>1&&<polyline points={poly} fill="none" stroke={sa.color} strokeWidth="2.5" strokeDasharray={ai>0?"6,3":""} strokeLinejoin="round"/>}
-                {sa.stats.map((s,i)=>{ const x=sa.stats.length>1?PAD+i/(sa.stats.length-1)*(W-PAD*2):W/2; return (<g key={i}><circle cx={x} cy={yTaux(s.tauxActivite)} r="4" fill={sa.color} stroke="#1a2540" strokeWidth="2"/><text x={x} y={yTaux(s.tauxActivite)-9} fontSize="8" fill={sa.color} textAnchor="middle">{s.tauxActivite}%</text>{ai===0&&<text x={x} y={H-8} fontSize="8" fill="#5a7090" textAnchor="middle" transform={"rotate(-30 "+x+" "+(H-8)+")"}>{(s.date||"").slice(0,5)}</text>}</g>); })}
+                {sa.stats.length>1&&<polyline points={poly} fill="none" stroke={sa.color} strokeWidth="2.5" strokeLinejoin="round"/>}
+                {sa.stats.map((s,i)=>(<g key={i}><circle cx={xMois(s.mois)} cy={yTaux(s.tauxActivite)} r="4" fill={sa.color} stroke="#1a2540" strokeWidth="2"/><text x={xMois(s.mois)} y={yTaux(s.tauxActivite)-9} fontSize="8" fill={sa.color} textAnchor="middle">{s.tauxActivite}%</text></g>))}
               </g>);
             }) : (<g>
               {stats.length>1&&<polyline points={stats.map((s,i)=>xPos(i)+","+yTaux(s.tauxActivite)).join(" ")} fill="none" stroke="#3b82f6" strokeWidth="2.5" strokeLinejoin="round"/>}
@@ -3520,7 +3776,7 @@ function TauxActiviteChart({ passages, postes }) {
             </g>)}
           </svg>
         </div>
-        {statsParAnnee.length > 1 && (<div style={{display:"flex",gap:16,marginTop:10,flexWrap:"wrap"}}>{statsParAnnee.map((sa,i)=>(<div key={sa.annee} style={{display:"flex",alignItems:"center",gap:5}}><svg width="24" height="4"><line x1="0" y1="2" x2="24" y2="2" stroke={sa.color} strokeWidth="2.5" strokeDasharray={i>0?"6,3":"none"}/></svg><span style={{fontSize:11,color:sa.color,fontWeight:700}}>{sa.annee}</span></div>))}</div>)}
+        {statsParAnnee.length > 0 && (<div style={{display:"flex",gap:16,marginTop:10,flexWrap:"wrap"}}>{statsParAnnee.map((sa,i)=>(<div key={sa.annee} style={{display:"flex",alignItems:"center",gap:5}}><svg width="24" height="4"><line x1="0" y1="2" x2="24" y2="2" stroke={sa.color} strokeWidth="2.5"/></svg><span style={{fontSize:11,color:sa.color,fontWeight:700}}>{sa.annee}</span></div>))}</div>)}
         <div style={{display:"flex",alignItems:"center",gap:10,marginTop:10}}>
           <button onClick={()=>setShowStatutGraph(v=>!v)} style={{background:showStatutGraph?"#243352":"transparent",color:showStatutGraph?"#f1f5f9":"#7a90aa",border:"1px solid "+(showStatutGraph?"#5a7090":"#3d5270"),borderRadius:7,padding:"5px 12px",fontSize:11,fontWeight:600,cursor:"pointer",fontFamily:"inherit"}}>{showStatutGraph?"Masquer":"Afficher"} Disparu/Inaccessible/Abime</button>
         </div>
@@ -3540,13 +3796,15 @@ function TauxActiviteChart({ passages, postes }) {
 }
 
 function CapturesChart({ passages, postes }) {
-  const [typeFilter, setTypeFilter] = useState("tous"); // tous | RE | RI
-  const [filterAnnee, setFilterAnnee] = useState("Toutes");
-  const [selectedAnnees, setSelectedAnnees] = useState([]);
-  const [filterTrimestre, setFilterTrimestre] = useState("Tous");
-  const [filterMois, setFilterMois] = useState("Tous");
+  const [typeFilter, setTypeFilter] = usePersistedValue("Captures_typeFilter", "tous"); // tous | RE | RI
+  const [filterAnnee, setFilterAnnee] = usePersistedValue("Captures_filterAnnee", anneeDefaut(passages));
+  const [selectedAnnees, setSelectedAnnees] = usePersistedValue("Captures_selectedAnnees", []);
+  const [filterTrimestre, setFilterTrimestre] = usePersistedValue("Captures_filterTrimestre", "Tous");
+  const [filterMois, setFilterMois] = usePersistedValue("Captures_filterMois", "Tous");
   const [fullscreen, setFullscreen] = useState(false);
   const [collapsed, setCollapsed] = usePersistedCollapsed("Captures", false);
+  const [echelle, setEchelle] = usePersistedValue("Captures_echelle", "auto"); // auto | manuel | plein
+  const [maxManuel, setMaxManuel] = usePersistedValue("Captures_maxManuel", 20);
 
   const pd = d => { if(!d) return new Date(0); const p=(d||"").split("/"); return p.length===3?new Date(p[2]+"-"+p[1]+"-"+p[0]):new Date(d); };
   const MOIS_LABELS = ["Jan.","Fév","Mar","Avr","Mai","Jun","Jul","Aoû","Sep","Oct","Nov","Dec"];
@@ -3592,33 +3850,52 @@ function CapturesChart({ passages, postes }) {
   const stats = passagesFiltres.map(getStats);
 
   const ANNEE_COLORS = ["#3b82f6","#22c55e","#f59e0b","#ef4444","#8b5cf6","#06b6d4"];
-  const anneesAffichees = selectedAnnees.length > 0 ? selectedAnnees.sort() : (filterAnnee !== "Toutes" ? [parseInt(filterAnnee)] : []);
+  // Regroupement par mois : plusieurs passages dans le meme mois sont cumules
+  function statsParMois(list) {
+    const parMois = {};
+    list.forEach(s => {
+      const d = pd(s.date);
+      if (!d || isNaN(d)) return;
+      const m = d.getMonth();
+      if (!parMois[m]) parMois[m] = [];
+      parMois[m].push(s);
+    });
+    return Object.keys(parMois).map(m => {
+      const arr = parMois[m];
+      return { mois: parseInt(m), date: arr[0].date, captures: arr.reduce((a,x)=>a+x.captures,0), nb: arr.length };
+    }).sort((a,b)=>a.mois-b.mois);
+  }
+
+  const anneesAffichees = selectedAnnees.length > 0 ? [...selectedAnnees].sort() : (filterAnnee !== "Toutes" ? [parseInt(filterAnnee)] : annees);
   const statsParAnnee = anneesAffichees.map((annee, idx) => ({
     annee, color: ANNEE_COLORS[idx % ANNEE_COLORS.length],
-    stats: filterPassagesByPeriode(passages, String(annee)).map(getStats),
+    stats: statsParMois(filterPassagesByPeriode(passages, String(annee)).map(getStats)),
   }));
 
   const W = fullscreen ? 1100 : 700, H = fullscreen ? 420 : 260, PAD = 50;
-  const maxCaptures = Math.max(...stats.map(s=>s.captures), 1);
+  // Echelle verticale : auto (ajustee aux donnees) | manuel | plein
+  const toutesValeurs = statsParAnnee.reduce((acc,sa)=>acc.concat(sa.stats.map(x=>x.captures)), []).concat(stats.map(x=>x.captures));
+  const maxDonnees = Math.max(...toutesValeurs, 1);
+  const maxAuto = Math.max(5, Math.ceil(maxDonnees*1.25/5)*5);
+  const maxCaptures = echelle === "manuel" ? Math.max(1, parseInt(maxManuel)||10) : maxAuto;
   function xPos(i) { return PAD + (stats.length > 1 ? i/(stats.length-1)*(W-PAD*2) : (W-PAD*2)/2); }
-  function yCapt(v) { return H - PAD - (v/maxCaptures)*(H-PAD*2); }
+  function xMois(m) { return PAD + (m/11)*(W-PAD*2); }
+  function yCapt(v) { return H - PAD - (Math.min(v, maxCaptures)/maxCaptures)*(H-PAD*2); }
   const inpStyle = { background:"#243352", border:"1px solid #3d5270", borderRadius:7, padding:"6px 10px", color:"#f1f5f9", fontSize:11, fontFamily:"inherit" };
 
   function exportThisChart() {
     const W2=W, H2=H, PAD2=PAD;
-    const maxCap2 = Math.max(...stats.map(s=>s.captures), 1);
-    const barsSvg = statsParAnnee.length > 1 ? statsParAnnee.map(function(sa){
-      if (sa.stats.length < 2) return "";
-      const poly = sa.stats.map(function(s,i){ const x=PAD2+i/(sa.stats.length-1)*(W2-PAD2*2); return x+","+(H2-PAD2-(s.captures/maxCap2)*(H2-PAD2*2)); }).join(" ");
-      const circles = sa.stats.map(function(s,i){ const x=PAD2+i/(sa.stats.length-1)*(W2-PAD2*2); const y=H2-PAD2-(s.captures/maxCap2)*(H2-PAD2*2); return "<circle cx='"+x+"' cy='"+y+"' r='4' fill='"+sa.color+"'/><text x='"+x+"' y='"+(y-8)+"' font-size='9' fill='"+sa.color+"' text-anchor='middle'>"+s.captures+"</text>"; }).join("");
-      return "<polyline points='"+poly+"' fill='none' stroke='"+sa.color+"' stroke-width='2'/>"+circles;
-    }).join("") : stats.map(function(s,i){
-      const bw = Math.max(8,(W2-PAD2*2)/stats.length*0.6);
-      const x = stats.length>1 ? PAD2+i/(stats.length-1)*(W2-PAD2*2) : W2/2;
-      const bh = (s.captures/maxCap2)*(H2-PAD2*2);
-      const by = H2-PAD2-bh;
-      return "<rect x='"+(x-bw/2)+"' y='"+by+"' width='"+bw+"' height='"+bh+"' fill='#a78bfa' rx='3'/><text x='"+x+"' y='"+(by-4)+"' font-size='9' fill='#a78bfa' text-anchor='middle'>"+s.captures+"</text><text x='"+x+"' y='"+(H2-8)+"' font-size='8' fill='#6b7280' text-anchor='middle'>"+s.date.slice(0,5)+"</text>";
-    }).join("");
+    const maxCap2 = maxCaptures;
+    const xM2 = m => PAD2 + (m/11)*(W2-PAD2*2);
+    const yC2 = v => H2-PAD2-(Math.min(v,maxCap2)/maxCap2)*(H2-PAD2*2);
+    const moisSvg = MOIS_LABELS.map(function(lbl,m){ return "<text x='"+xM2(m)+"' y='"+(H2-8)+"' font-size='8' fill='#6b7280' text-anchor='middle'>"+lbl+"</text>"; }).join("");
+    const barsSvg = moisSvg + statsParAnnee.map(function(sa){
+      if (sa.stats.length < 1) return "";
+      const poly = sa.stats.map(function(x){ return xM2(x.mois)+","+yC2(x.captures); }).join(" ");
+      const ligne = sa.stats.length>1 ? "<polyline points='"+poly+"' fill='none' stroke='"+sa.color+"' stroke-width='2'/>" : "";
+      const circles = sa.stats.map(function(x){ const y=yC2(x.captures); return "<circle cx='"+xM2(x.mois)+"' cy='"+y+"' r='3.5' fill='"+sa.color+"'/><text x='"+xM2(x.mois)+"' y='"+(y-8)+"' font-size='8' fill='"+sa.color+"' text-anchor='middle'>"+x.captures+"</text>"; }).join("");
+      return ligne + circles;
+    }).join("") + statsParAnnee.map(function(sa,i){ return "<line x1='"+(PAD2+i*70)+"' x2='"+(PAD2+i*70+20)+"' y1='14' y2='14' stroke='"+sa.color+"' stroke-width='3'/><text x='"+(PAD2+i*70+25)+"' y='18' font-size='10' fill='"+sa.color+"'>"+sa.annee+"</text>"; }).join("");
     const svgCap = "<svg width='"+W2+"' height='"+H2+"' xmlns='http://www.w3.org/2000/svg' style='background:#f9fafb;border-radius:8px;border:1px solid #e5e7eb'>"+barsSvg+"</svg>";
 
     const typeLabel = typeFilter==="RE"?"Rongeurs exterieurs":typeFilter==="RI"?"Rongeurs interieurs":"Tous rongeurs";
@@ -3670,7 +3947,17 @@ function CapturesChart({ passages, postes }) {
           {MOIS_LABELS.map((m,i)=><option key={i} value={i}>{m}</option>)}
         </select>
       </div>
-      <button onClick={()=>{setTypeFilter("tous");setFilterAnnee("Toutes");setSelectedAnnees([]);setFilterTrimestre("Tous");setFilterMois("Tous");}}
+      <div>
+        <label style={{fontSize:9,color:"#7a90aa",display:"block",marginBottom:3}}>Echelle Y</label>
+        <div style={{display:"flex",gap:4,alignItems:"center"}}>
+          <select value={echelle} onChange={e=>setEchelle(e.target.value)} style={inpStyle}>
+            <option value="auto">Auto</option>
+            <option value="manuel">Manuel</option>
+          </select>
+          {echelle==="manuel" && <input type="number" min="1" value={maxManuel} onChange={e=>setMaxManuel(e.target.value)} style={{...inpStyle,width:60}}/>}
+        </div>
+      </div>
+      <button onClick={()=>{setTypeFilter("tous");setFilterAnnee("Toutes");setSelectedAnnees([]);setFilterTrimestre("Tous");setFilterMois("Tous");setEchelle("auto");}}
         style={{background:"transparent",color:"#7a90aa",border:"1px solid #3d5270",borderRadius:7,padding:"6px 12px",fontSize:11,cursor:"pointer",fontFamily:"inherit"}}>
         Reset
       </button>
@@ -3684,10 +3971,11 @@ function CapturesChart({ passages, postes }) {
     <div style={{overflowX:"auto"}}>
       <svg viewBox={"0 0 "+W+" "+H} style={{width:"100%",maxWidth:W,display:"block"}}>
         {[0,25,50,75,100].map(pct=>{ const v=Math.round(maxCaptures*pct/100); const y=yCapt(v); return(<g key={pct}><line x1={PAD} x2={W-PAD} y1={y} y2={y} stroke="#2d3f62" strokeWidth="1"/><text x={PAD-4} y={y+4} fontSize="9" fill="#5a7090" textAnchor="end">{v}</text></g>); })}
-        {statsParAnnee.length > 1 ? statsParAnnee.map((sa,ai)=>{ if(sa.stats.length<2)return null; const poly=sa.stats.map((s,i)=>{ const x=PAD+i/(sa.stats.length-1)*(W-PAD*2); return x+","+yCapt(s.captures); }).join(" "); return(<g key={sa.annee}><polyline points={poly} fill="none" stroke={sa.color} strokeWidth="2" strokeDasharray={ai>0?"6,3":""} strokeLinejoin="round"/>{sa.stats.map((s,i)=>{ const x=PAD+i/(sa.stats.length-1)*(W-PAD*2); return(<g key={i}><circle cx={x} cy={yCapt(s.captures)} r="4" fill={sa.color} stroke="#1a2540" strokeWidth="1.5"/>{s.captures>0&&<text x={x} y={yCapt(s.captures)-8} fontSize="8" fill={sa.color} textAnchor="middle">{s.captures}</text>}{ai===0&&<text x={x} y={H-8} fontSize="8" fill="#5a7090" textAnchor="middle" transform={"rotate(-30 "+x+" "+(H-8)+")"}>{(s.date||"").slice(0,5)}</text>}</g>); })}</g>); }) : stats.map((s,i)=>{ const bw=Math.max(8,(W-PAD*2)/stats.length*0.6); const bx=xPos(i)-bw/2; const bh=(s.captures/maxCaptures)*(H-PAD*2); const by=H-PAD-bh; const colB=s.captures===0?"#3d5270":"#a78bfa"; return(<g key={i}><rect x={bx} y={by} width={bw} height={bh} fill={colB} rx="3"/>{s.captures>0&&<text x={xPos(i)} y={by-4} fontSize="9" fill="#a78bfa" textAnchor="middle">{s.captures}</text>}<text x={xPos(i)} y={H-8} fontSize="8" fill="#5a7090" textAnchor="middle" transform={"rotate(-30 "+xPos(i)+" "+(H-8)+")"}>{(s.date||"").slice(0,5)}</text></g>); })}
+        {MOIS_LABELS.map((lbl,mi)=>(<text key={mi} x={xMois(mi)} y={H-8} fontSize="8" fill="#5a7090" textAnchor="middle">{lbl}</text>))}
+        {statsParAnnee.map((sa)=>{ if(sa.stats.length<1) return null; const poly=sa.stats.map(x=>xMois(x.mois)+","+yCapt(x.captures)).join(" "); return(<g key={sa.annee}>{sa.stats.length>1&&<polyline points={poly} fill="none" stroke={sa.color} strokeWidth="2" strokeLinejoin="round"/>}{sa.stats.map((x,i)=>(<g key={i}><circle cx={xMois(x.mois)} cy={yCapt(x.captures)} r="4" fill={sa.color} stroke="#1a2540" strokeWidth="1.5"/>{x.captures>0&&<text x={xMois(x.mois)} y={yCapt(x.captures)-8} fontSize="8" fill={sa.color} textAnchor="middle">{x.captures}</text>}</g>))}</g>); })}
       </svg>
     </div>
-    {statsParAnnee.length > 1 && (<div style={{display:"flex",gap:16,marginTop:10,flexWrap:"wrap"}}>{statsParAnnee.map((sa,i)=>(<div key={sa.annee} style={{display:"flex",alignItems:"center",gap:5}}><svg width="24" height="4"><line x1="0" y1="2" x2="24" y2="2" stroke={sa.color} strokeWidth="2.5" strokeDasharray={i>0?"6,3":"none"}/></svg><span style={{fontSize:11,color:sa.color,fontWeight:700}}>{sa.annee}</span></div>))}</div>)}
+    {statsParAnnee.length > 0 && (<div style={{display:"flex",gap:16,marginTop:10,flexWrap:"wrap"}}>{statsParAnnee.map((sa,i)=>(<div key={sa.annee} style={{display:"flex",alignItems:"center",gap:5}}><svg width="24" height="4"><line x1="0" y1="2" x2="24" y2="2" stroke={sa.color} strokeWidth="2.5"/></svg><span style={{fontSize:11,color:sa.color,fontWeight:700}}>{sa.annee}</span></div>))}</div>)}
     </>
   );
 
@@ -3744,14 +4032,16 @@ function CapturesChart({ passages, postes }) {
 
 
 function PostesTouchesChart({ passages, postes }) {
-  const [typeFilter, setTypeFilter] = useState("tous"); // tous | RE | RI
-  const [filterAnnee, setFilterAnnee] = useState("Toutes");
-  const [selectedAnnees, setSelectedAnnees] = useState([]);
-  const [filterTrimestre, setFilterTrimestre] = useState("Tous");
-  const [filterMois, setFilterMois] = useState("Tous");
+  const [typeFilter, setTypeFilter] = usePersistedValue("PostesTouches_typeFilter", "tous"); // tous | RE | RI
+  const [filterAnnee, setFilterAnnee] = usePersistedValue("PostesTouches_filterAnnee", anneeDefaut(passages));
+  const [selectedAnnees, setSelectedAnnees] = usePersistedValue("PostesTouches_selectedAnnees", []);
+  const [filterTrimestre, setFilterTrimestre] = usePersistedValue("PostesTouches_filterTrimestre", "Tous");
+  const [filterMois, setFilterMois] = usePersistedValue("PostesTouches_filterMois", "Tous");
   const [fullscreen, setFullscreen] = useState(false);
   const [collapsed, setCollapsed] = usePersistedCollapsed("PostesTouches", false);
   const [showTotal, setShowTotal] = usePersistedBool("PostesTouches_showTotal", true);
+  const [echelle, setEchelle] = usePersistedValue("PostesTouches_echelle", "auto"); // auto | manuel | plein
+  const [maxManuel, setMaxManuel] = usePersistedValue("PostesTouches_maxManuel", 20);
 
   const pd = d => { if(!d) return new Date(0); const p=(d||"").split("/"); return p.length===3?new Date(p[2]+"-"+p[1]+"-"+p[0]):new Date(d); };
   const MOIS_LABELS = ["Jan.","Fév","Mar","Avr","Mai","Jun","Jul","Aoû","Sep","Oct","Nov","Dec"];
@@ -3800,37 +4090,56 @@ function PostesTouchesChart({ passages, postes }) {
   const stats = passagesFiltres.map(getStats);
 
   const ANNEE_COLORS = ["#3b82f6","#22c55e","#f59e0b","#ef4444","#8b5cf6","#06b6d4"];
-  const anneesAffichees = selectedAnnees.length > 0 ? selectedAnnees.sort() : (filterAnnee !== "Toutes" ? [parseInt(filterAnnee)] : []);
+  // Regroupement par mois : plusieurs passages dans le meme mois sont moyennes
+  function statsParMois(list) {
+    const parMois = {};
+    list.forEach(s => {
+      const d = pd(s.date);
+      if (!d || isNaN(d)) return;
+      const m = d.getMonth();
+      if (!parMois[m]) parMois[m] = [];
+      parMois[m].push(s);
+    });
+    return Object.keys(parMois).map(m => {
+      const arr = parMois[m];
+      return { mois: parseInt(m), date: arr[0].date, touches: Math.round(arr.reduce((a,x)=>a+x.touches,0)/arr.length), nb: arr.length };
+    }).sort((a,b)=>a.mois-b.mois);
+  }
+
+  const anneesAffichees = selectedAnnees.length > 0 ? [...selectedAnnees].sort() : (filterAnnee !== "Toutes" ? [parseInt(filterAnnee)] : annees);
   const statsParAnnee = anneesAffichees.map((annee, idx) => ({
     annee, color: ANNEE_COLORS[idx % ANNEE_COLORS.length],
-    stats: filterPassagesByPeriode(passages, String(annee)).map(getStats),
+    stats: statsParMois(filterPassagesByPeriode(passages, String(annee)).map(getStats)),
   }));
 
   const W = fullscreen ? 1100 : 700, H = fullscreen ? 420 : 260, PAD = 50;
-  const maxVal = Math.max(...stats.map(s=>s.touches), totalPostes, 1);
+  // Echelle verticale : auto (ajustee aux donnees) | manuel | plein (parc complet)
+  const toutesValeurs = statsParAnnee.reduce((acc,sa)=>acc.concat(sa.stats.map(x=>x.touches)), []).concat(stats.map(x=>x.touches));
+  const maxDonnees = Math.max(...toutesValeurs, showTotal ? 0 : 0, 1);
+  const maxAuto = Math.min(totalPostes||100, Math.max(5, Math.ceil(maxDonnees*1.25/5)*5));
+  const maxVal = echelle === "plein" ? Math.max(totalPostes,1) : echelle === "manuel" ? Math.max(1, parseInt(maxManuel)||10) : maxAuto;
+
   function xPos(i) { return PAD + (stats.length > 1 ? i/(stats.length-1)*(W-PAD*2) : (W-PAD*2)/2); }
-  function yVal(v) { return H - PAD - (v/maxVal)*(H-PAD*2); }
+  function xMois(m) { return PAD + (m/11)*(W-PAD*2); }
+  function yVal(v) { return H - PAD - (Math.min(v, maxVal)/maxVal)*(H-PAD*2); }
   const yTotal = yVal(totalPostes);
   const inpStyle = { background:"#243352", border:"1px solid #3d5270", borderRadius:7, padding:"6px 10px", color:"#f1f5f9", fontSize:11, fontFamily:"inherit" };
 
   function exportThisChart() {
     const W2=W, H2=H, PAD2=PAD;
-    const maxVal2 = Math.max(...stats.map(s=>s.touches), totalPostes, 1);
+    const maxVal2 = maxVal;
     function yVal2(v) { return H2-PAD2-(v/maxVal2)*(H2-PAD2*2); }
     const yTotal2 = yVal2(totalPostes);
-    const totalLineSvg = showTotal ? "<line x1='"+PAD2+"' x2='"+(W2-PAD2)+"' y1='"+yTotal2+"' y2='"+yTotal2+"' stroke='#ef4444' stroke-dasharray='5,3' stroke-width='1.5'/><text x='"+(W2-PAD2+4)+"' y='"+(yTotal2+4)+"' font-size='9' fill='#ef4444'>Total ("+totalPostes+")</text>" : "";
-    const barsSvg = statsParAnnee.length > 1 ? statsParAnnee.map(function(sa){
-      if (sa.stats.length < 2) return "";
-      const poly = sa.stats.map(function(s,i){ const x=PAD2+i/(sa.stats.length-1)*(W2-PAD2*2); return x+","+yVal2(s.touches); }).join(" ");
-      const circles = sa.stats.map(function(s,i){ const x=PAD2+i/(sa.stats.length-1)*(W2-PAD2*2); const y=yVal2(s.touches); return "<circle cx='"+x+"' cy='"+y+"' r='4' fill='"+sa.color+"'/><text x='"+x+"' y='"+(y-8)+"' font-size='9' fill='"+sa.color+"' text-anchor='middle'>"+s.touches+"</text>"; }).join("");
-      return "<polyline points='"+poly+"' fill='none' stroke='"+sa.color+"' stroke-width='2'/>"+circles;
-    }).join("") : stats.map(function(s,i){
-      const bw = Math.max(8,(W2-PAD2*2)/stats.length*0.6);
-      const x = stats.length>1 ? PAD2+i/(stats.length-1)*(W2-PAD2*2) : W2/2;
-      const bh = (s.touches/maxVal2)*(H2-PAD2*2);
-      const by = H2-PAD2-bh;
-      return "<rect x='"+(x-bw/2)+"' y='"+by+"' width='"+bw+"' height='"+bh+"' fill='#22c55e' rx='3'/><text x='"+x+"' y='"+(by-4)+"' font-size='9' fill='#22c55e' text-anchor='middle'>"+s.touches+"</text><text x='"+x+"' y='"+(H2-8)+"' font-size='8' fill='#6b7280' text-anchor='middle'>"+s.date.slice(0,5)+"</text>";
-    }).join("");
+    const totalLineSvg = (showTotal && totalPostes <= maxVal2) ? "<line x1='"+PAD2+"' x2='"+(W2-PAD2)+"' y1='"+yTotal2+"' y2='"+yTotal2+"' stroke='#ef4444' stroke-dasharray='5,3' stroke-width='1.5'/><text x='"+(W2-PAD2+4)+"' y='"+(yTotal2+4)+"' font-size='9' fill='#ef4444'>Total ("+totalPostes+")</text>" : "";
+    const xM2 = m => PAD2 + (m/11)*(W2-PAD2*2);
+    const moisSvg = MOIS_LABELS.map(function(lbl,m){ return "<text x='"+xM2(m)+"' y='"+(H2-8)+"' font-size='8' fill='#6b7280' text-anchor='middle'>"+lbl+"</text>"; }).join("");
+    const barsSvg = moisSvg + statsParAnnee.map(function(sa){
+      if (sa.stats.length < 1) return "";
+      const poly = sa.stats.map(function(x){ return xM2(x.mois)+","+yVal2(x.touches); }).join(" ");
+      const ligne = sa.stats.length>1 ? "<polyline points='"+poly+"' fill='none' stroke='"+sa.color+"' stroke-width='2'/>" : "";
+      const circles = sa.stats.map(function(x){ const y=yVal2(x.touches); return "<circle cx='"+xM2(x.mois)+"' cy='"+y+"' r='3.5' fill='"+sa.color+"'/><text x='"+xM2(x.mois)+"' y='"+(y-8)+"' font-size='8' fill='"+sa.color+"' text-anchor='middle'>"+x.touches+"</text>"; }).join("");
+      return ligne + circles;
+    }).join("") + statsParAnnee.map(function(sa,i){ return "<line x1='"+(PAD2+i*70)+"' x2='"+(PAD2+i*70+20)+"' y1='14' y2='14' stroke='"+sa.color+"' stroke-width='3'/><text x='"+(PAD2+i*70+25)+"' y='18' font-size='10' fill='"+sa.color+"'>"+sa.annee+"</text>"; }).join("");
     const svgChart = "<svg width='"+W2+"' height='"+H2+"' xmlns='http://www.w3.org/2000/svg' style='background:#f9fafb;border-radius:8px;border:1px solid #e5e7eb'>"+totalLineSvg+barsSvg+"</svg>";
 
     const typeLabel = typeFilter==="RE"?"Rongeurs exterieurs":typeFilter==="RI"?"Rongeurs interieurs":"Tous rongeurs";
@@ -3882,11 +4191,22 @@ function PostesTouchesChart({ passages, postes }) {
           {MOIS_LABELS.map((m,i)=><option key={i} value={i}>{m}</option>)}
         </select>
       </div>
+      <div>
+        <label style={{fontSize:9,color:"#7a90aa",display:"block",marginBottom:3}}>Echelle Y</label>
+        <div style={{display:"flex",gap:4,alignItems:"center"}}>
+          <select value={echelle} onChange={e=>setEchelle(e.target.value)} style={inpStyle}>
+            <option value="auto">Auto</option>
+            <option value="manuel">Manuel</option>
+            <option value="plein">Parc complet</option>
+          </select>
+          {echelle==="manuel" && <input type="number" min="1" value={maxManuel} onChange={e=>setMaxManuel(e.target.value)} style={{...inpStyle,width:60}}/>}
+        </div>
+      </div>
       <button onClick={()=>setShowTotal(v=>!v)}
         style={{background:showTotal?"#243352":"transparent",color:showTotal?"#f1f5f9":"#7a90aa",border:"1px solid "+(showTotal?"#5a7090":"#3d5270"),borderRadius:7,padding:"6px 12px",fontSize:11,fontWeight:600,cursor:"pointer",fontFamily:"inherit"}}>
         {showTotal?"Masquer":"Afficher"} ligne totale
       </button>
-      <button onClick={()=>{setTypeFilter("tous");setFilterAnnee("Toutes");setSelectedAnnees([]);setFilterTrimestre("Tous");setFilterMois("Tous");setShowTotal(true);}}
+      <button onClick={()=>{setTypeFilter("tous");setFilterAnnee("Toutes");setSelectedAnnees([]);setFilterTrimestre("Tous");setFilterMois("Tous");setShowTotal(true);setEchelle("auto");}}
         style={{background:"transparent",color:"#7a90aa",border:"1px solid #3d5270",borderRadius:7,padding:"6px 12px",fontSize:11,cursor:"pointer",fontFamily:"inherit"}}>
         Reset
       </button>
@@ -3900,14 +4220,22 @@ function PostesTouchesChart({ passages, postes }) {
     <div style={{overflowX:"auto"}}>
       <svg viewBox={"0 0 "+W+" "+H} style={{width:"100%",maxWidth:W,display:"block"}}>
         {[0,25,50,75,100].map(pct=>{ const v=Math.round(maxVal*pct/100); const y=yVal(v); return(<g key={pct}><line x1={PAD} x2={W-PAD} y1={y} y2={y} stroke="#2d3f62" strokeWidth="1"/><text x={PAD-4} y={y+4} fontSize="9" fill="#5a7090" textAnchor="end">{v}</text></g>); })}
-        {showTotal && (<>
+        {showTotal && totalPostes <= maxVal && (<>
         <line x1={PAD} x2={W-PAD} y1={yTotal} y2={yTotal} stroke="#ef4444" strokeDasharray="5,3" strokeWidth="1.5"/>
         <text x={W-PAD+4} y={yTotal+4} fontSize="9" fill="#ef4444">Total ({totalPostes})</text>
         </>)}
-        {statsParAnnee.length > 1 ? statsParAnnee.map((sa,ai)=>{ if(sa.stats.length<2)return null; const poly=sa.stats.map((s,i)=>{ const x=PAD+i/(sa.stats.length-1)*(W-PAD*2); return x+","+yVal(s.touches); }).join(" "); return(<g key={sa.annee}><polyline points={poly} fill="none" stroke={sa.color} strokeWidth="2" strokeDasharray={ai>0?"6,3":""} strokeLinejoin="round"/>{sa.stats.map((s,i)=>{ const x=PAD+i/(sa.stats.length-1)*(W-PAD*2); return(<g key={i}><circle cx={x} cy={yVal(s.touches)} r="4" fill={sa.color} stroke="#1a2540" strokeWidth="1.5"/>{s.touches>0&&<text x={x} y={yVal(s.touches)-8} fontSize="8" fill={sa.color} textAnchor="middle">{s.touches}</text>}{ai===0&&<text x={x} y={H-8} fontSize="8" fill="#5a7090" textAnchor="middle" transform={"rotate(-30 "+x+" "+(H-8)+")"}>{(s.date||"").slice(0,5)}</text>}</g>); })}</g>); }) : stats.map((s,i)=>{ const bw=Math.max(8,(W-PAD*2)/stats.length*0.6); const bx=xPos(i)-bw/2; const bh=(s.touches/maxVal)*(H-PAD*2); const by=H-PAD-bh; const colB=s.touches===0?"#3d5270":"#22c55e"; return(<g key={i}><rect x={bx} y={by} width={bw} height={bh} fill={colB} rx="3"/>{s.touches>0&&<text x={xPos(i)} y={by-4} fontSize="9" fill="#22c55e" textAnchor="middle">{s.touches}</text>}<text x={xPos(i)} y={H-8} fontSize="8" fill="#5a7090" textAnchor="middle" transform={"rotate(-30 "+xPos(i)+" "+(H-8)+")"}>{(s.date||"").slice(0,5)}</text></g>); })}
+        {MOIS_LABELS.map((lbl,mi)=>(<text key={mi} x={xMois(mi)} y={H-8} fontSize="8" fill="#5a7090" textAnchor="middle">{lbl}</text>))}
+        {statsParAnnee.map((sa)=>{
+          if(sa.stats.length < 1) return null;
+          const poly = sa.stats.map(x=>xMois(x.mois)+","+yVal(x.touches)).join(" ");
+          return (<g key={sa.annee}>
+            {sa.stats.length>1&&<polyline points={poly} fill="none" stroke={sa.color} strokeWidth="2" strokeLinejoin="round"/>}
+            {sa.stats.map((x,i)=>(<g key={i}><circle cx={xMois(x.mois)} cy={yVal(x.touches)} r="4" fill={sa.color} stroke="#1a2540" strokeWidth="1.5"/>{x.touches>0&&<text x={xMois(x.mois)} y={yVal(x.touches)-8} fontSize="8" fill={sa.color} textAnchor="middle">{x.touches}</text>}</g>))}
+          </g>);
+        })}
       </svg>
     </div>
-    {statsParAnnee.length > 1 && (<div style={{display:"flex",gap:16,marginTop:10,flexWrap:"wrap"}}>{statsParAnnee.map((sa,i)=>(<div key={sa.annee} style={{display:"flex",alignItems:"center",gap:5}}><svg width="24" height="4"><line x1="0" y1="2" x2="24" y2="2" stroke={sa.color} strokeWidth="2.5" strokeDasharray={i>0?"6,3":"none"}/></svg><span style={{fontSize:11,color:sa.color,fontWeight:700}}>{sa.annee}</span></div>))}</div>)}
+    {statsParAnnee.length > 0 && (<div style={{display:"flex",gap:16,marginTop:10,flexWrap:"wrap"}}>{statsParAnnee.map((sa,i)=>(<div key={sa.annee} style={{display:"flex",alignItems:"center",gap:5}}><svg width="24" height="4"><line x1="0" y1="2" x2="24" y2="2" stroke={sa.color} strokeWidth="2.5"/></svg><span style={{fontSize:11,color:sa.color,fontWeight:700}}>{sa.annee}</span></div>))}</div>)}
     </>
   );
 
@@ -3979,15 +4307,17 @@ function DeivEvolutionStandaloneChart({ passages }) {
     Tipules:      { leger:10,  moyen:20  },
   };
 
-  const [selectedCats, setSelectedCats] = useState([]); // [] = Total toutes especes
-  const [filterAnnee, setFilterAnnee] = useState("Toutes");
-  const [selectedAnnees, setSelectedAnnees] = useState([]);
-  const [filterTrimestre, setFilterTrimestre] = useState("Tous");
-  const [filterMois, setFilterMois] = useState("Tous");
+  const [selectedCats, setSelectedCats] = usePersistedValue("DeivEvolution_selectedCats", []); // [] = Total toutes especes
+  const [filterAnnee, setFilterAnnee] = usePersistedValue("DeivEvolution_filterAnnee", anneeDefaut(passages.filter(p=>p.type==="Insectes volants")));
+  const [selectedAnnees, setSelectedAnnees] = usePersistedValue("DeivEvolution_selectedAnnees", []);
+  const [filterTrimestre, setFilterTrimestre] = usePersistedValue("DeivEvolution_filterTrimestre", "Tous");
+  const [filterMois, setFilterMois] = usePersistedValue("DeivEvolution_filterMois", "Tous");
   const [showSeuils, setShowSeuils] = usePersistedBool("DeivEvolution_showSeuils", true);
   const [fullscreen, setFullscreen] = useState(false);
   const [collapsed, setCollapsed] = usePersistedCollapsed("DeivEvolution", false);
   const [seuilsIV, setSeuilsIV] = useState(DEFAULT_SEUILS);
+  const [echelle, setEchelle] = usePersistedValue("DeivEvolution_echelle", "auto"); // auto | manuel
+  const [maxManuel, setMaxManuel] = usePersistedValue("DeivEvolution_maxManuel", 20);
 
   useEffect(() => {
     sbGet("seuils").then(data => {
@@ -4050,41 +4380,76 @@ function DeivEvolutionStandaloneChart({ passages }) {
   const passagesFiltres = filterPassagesByPeriode(passagesDeiv);
   const stats = passagesFiltres.map(getStats);
 
+  const ANNEE_COLORS = ["#3b82f6","#22c55e","#f59e0b","#ef4444","#8b5cf6","#06b6d4"];
+
+  // Valeur tracee : somme des especes selectionnees (ou total toutes especes)
+  function valeurDe(s) { return catsActives.reduce((acc,c)=>acc+(s[c]||0), 0); }
+
+  // Regroupement par mois : plusieurs passages dans le meme mois sont cumules
+  function statsParMois(list) {
+    const parMois = {};
+    list.forEach(s => {
+      const d = pd(s.date);
+      if (!d || isNaN(d)) return;
+      const m = d.getMonth();
+      if (!parMois[m]) parMois[m] = [];
+      parMois[m].push(s);
+    });
+    return Object.keys(parMois).map(m => {
+      const arr = parMois[m];
+      return { mois: parseInt(m), date: arr[0].date, valeur: arr.reduce((a,x)=>a+valeurDe(x),0), nb: arr.length };
+    }).sort((a,b)=>a.mois-b.mois);
+  }
+
+  const anneesAffichees = selectedAnnees.length > 0 ? [...selectedAnnees].sort() : (filterAnnee !== "Toutes" ? [parseInt(filterAnnee)] : annees);
+  const statsParAnnee = anneesAffichees.map((annee, idx) => ({
+    annee, color: ANNEE_COLORS[idx % ANNEE_COLORS.length],
+    stats: statsParMois(filterPassagesByPeriode(passagesDeiv, String(annee)).map(getStats)),
+  }));
+
   const W = fullscreen ? 1100 : 700, H = fullscreen ? 420 : 260, PAD = 50;
-  const maxVal = Math.max(...stats.flatMap(s=>catsActives.map(c=>s[c]||0)), 1);
+  // Echelle verticale : auto (ajustee aux donnees) | manuel
+  const toutesValeurs = statsParAnnee.reduce((acc,sa)=>acc.concat(sa.stats.map(x=>x.valeur)), []);
+  const seuilRef = (showSeuils && selectedCats.length === 1 && seuilsIV[selectedCats[0]]) ? seuilsIV[selectedCats[0]].moyen : 0;
+  const maxDonnees = Math.max(...toutesValeurs, seuilRef, 1);
+  const maxAuto = Math.max(5, Math.ceil(maxDonnees*1.25/5)*5);
+  const maxVal = echelle === "manuel" ? Math.max(1, parseInt(maxManuel)||10) : maxAuto;
   function xPos(i) { return PAD + (stats.length > 1 ? i/(stats.length-1)*(W-PAD*2) : (W-PAD*2)/2); }
-  function yVal(v) { return H - PAD - (v/maxVal)*(H-PAD*2); }
+  function xMois(m) { return PAD + (m/11)*(W-PAD*2); }
+  function yVal(v) { return H - PAD - (Math.min(v, maxVal)/maxVal)*(H-PAD*2); }
   const inpStyle = { background:"#243352", border:"1px solid #3d5270", borderRadius:7, padding:"6px 10px", color:"#f1f5f9", fontSize:11, fontFamily:"inherit" };
   const showSeuilsLine = showSeuils && selectedCats.length === 1;
   const activeSeuil = showSeuilsLine ? seuilsIV[selectedCats[0]] : null;
 
   function exportThisChart() {
     const W2=W, H2=H, PAD2=PAD;
-    const maxVal2 = Math.max(...stats.flatMap(s=>catsActives.map(c=>s[c]||0)), 1);
-    function yVal2(v) { return H2-PAD2-(v/maxVal2)*(H2-PAD2*2); }
+    const maxVal2 = maxVal;
+    function yVal2(v) { return H2-PAD2-(Math.min(v,maxVal2)/maxVal2)*(H2-PAD2*2); }
+    const xM2 = m => PAD2 + (m/11)*(W2-PAD2*2);
     let seuilsSvg = "";
     if (showSeuilsLine && activeSeuil) {
       const yLeger = yVal2(activeSeuil.leger), yMoyen = yVal2(activeSeuil.moyen);
       seuilsSvg = "<line x1='"+PAD2+"' x2='"+(W2-PAD2)+"' y1='"+yLeger+"' y2='"+yLeger+"' stroke='orange' stroke-dasharray='5,3' stroke-width='1.5'/><text x='"+(W2-PAD2+4)+"' y='"+(yLeger+4)+"' font-size='9' fill='orange'>Vig.</text><line x1='"+PAD2+"' x2='"+(W2-PAD2)+"' y1='"+yMoyen+"' y2='"+yMoyen+"' stroke='red' stroke-dasharray='5,3' stroke-width='1.5'/><text x='"+(W2-PAD2+4)+"' y='"+(yMoyen+4)+"' font-size='9' fill='red'>Crit.</text>";
     }
-    const linesSvg = catsActives.map(function(cat){
-      const col = cat==="__TOTAL__" ? "#a78bfa" : CAT_COLORS[cat];
-      const pts = stats.map(function(s,i){ const x = stats.length>1?PAD2+i/(stats.length-1)*(W2-PAD2*2):W2/2; return x+","+yVal2(s[cat]||0); }).join(" ");
-      const circles = stats.map(function(s,i){ const x=stats.length>1?PAD2+i/(stats.length-1)*(W2-PAD2*2):W2/2; const y=yVal2(s[cat]||0); return "<circle cx='"+x+"' cy='"+y+"' r='3' fill='"+col+"'/>"+((s[cat]||0)>0?"<text x='"+x+"' y='"+(y-7)+"' font-size='8' fill='"+col+"' text-anchor='middle'>"+s[cat]+"</text>":""); }).join("");
-      return (stats.length>1?"<polyline points='"+pts+"' fill='none' stroke='"+col+"' stroke-width='2'/>":"")+circles;
-    }).join("");
-    const datesSvg = stats.map(function(s,i){ const x=stats.length>1?PAD2+i/(stats.length-1)*(W2-PAD2*2):W2/2; return "<text x='"+x+"' y='"+(H2-6)+"' font-size='8' fill='#6b7280' text-anchor='middle' transform='rotate(-30 "+x+" "+(H2-6)+")'>"+(s.date||"").slice(0,5)+"</text>"; }).join("");
+    const linesSvg = statsParAnnee.map(function(sa){
+      if (!sa.stats.length) return "";
+      const pts = sa.stats.map(function(x){ return xM2(x.mois)+","+yVal2(x.valeur); }).join(" ");
+      const ligne = sa.stats.length>1 ? "<polyline points='"+pts+"' fill='none' stroke='"+sa.color+"' stroke-width='2'/>" : "";
+      const circles = sa.stats.map(function(x){ const y=yVal2(x.valeur); return "<circle cx='"+xM2(x.mois)+"' cy='"+y+"' r='3.5' fill='"+sa.color+"'/><text x='"+xM2(x.mois)+"' y='"+(y-8)+"' font-size='8' fill='"+sa.color+"' text-anchor='middle'>"+x.valeur+"</text>"; }).join("");
+      return ligne + circles;
+    }).join("") + statsParAnnee.map(function(sa,i){ return "<line x1='"+(PAD2+i*70)+"' x2='"+(PAD2+i*70+20)+"' y1='14' y2='14' stroke='"+sa.color+"' stroke-width='3'/><text x='"+(PAD2+i*70+25)+"' y='18' font-size='10' fill='"+sa.color+"'>"+sa.annee+"</text>"; }).join("");
+    const datesSvg = MOIS_LABELS.map(function(lbl,m){ return "<text x='"+xM2(m)+"' y='"+(H2-8)+"' font-size='8' fill='#6b7280' text-anchor='middle'>"+lbl+"</text>"; }).join("");
     const svgChart = "<svg width='"+W2+"' height='"+H2+"' xmlns='http://www.w3.org/2000/svg' style='background:#f9fafb;border-radius:8px;border:1px solid #e5e7eb'>"+seuilsSvg+linesSvg+datesSvg+"</svg>";
 
     const labelStr = selectedCats.length===0 ? "Total toutes especes" : selectedCats.join(", ");
-    const rows = stats.map(function(s){ return "<tr><td>"+s.date+"</td>"+catsActives.map(function(c){ return "<td style='font-weight:700'>"+(s[c]||0)+"</td>"; }).join("")+"</tr>"; }).join("");
-    const headerCols = catsActives.map(function(c){ return "<th>"+(c==="__TOTAL__"?"Total":c)+"</th>"; }).join("");
+    const rows = statsParAnnee.map(function(sa){ return sa.stats.map(function(x){ return "<tr><td>"+MOIS_LABELS[x.mois]+" "+sa.annee+"</td><td style='font-weight:700'>"+x.valeur+"</td></tr>"; }).join(""); }).join("");
+    const headerCols = "<th>Valeur</th>";
 
     exportHTML("Évolution insectes volants DEIV - "+CLIENT_CONFIG.nom,
       "<h1>Évolution insectes volants DEIV - "+labelStr+"</h1>"+
       "<p style='color:#6b7280;margin-bottom:16px'>"+CLIENT_CONFIG.nom+" - "+new Date().toLocaleDateString("fr-FR")+"</p>"+
       svgChart+
-      "<table style='width:100%;border-collapse:collapse;margin-top:16px'><thead><tr><th>Date</th>"+headerCols+"</tr></thead><tbody>"+rows+"</tbody></table>"
+      "<table style='width:100%;border-collapse:collapse;margin-top:16px'><thead><tr><th>Mois</th>"+headerCols+"</tr></thead><tbody>"+rows+"</tbody></table>"
     );
   }
 
@@ -4134,7 +4499,17 @@ function DeivEvolutionStandaloneChart({ passages }) {
           {MOIS_LABELS.map((m,i)=><option key={i} value={i}>{m}</option>)}
         </select>
       </div>
-      <button onClick={()=>{setSelectedCats([]);setFilterAnnee("Toutes");setSelectedAnnees([]);setFilterTrimestre("Tous");setFilterMois("Tous");}}
+      <div>
+        <label style={{fontSize:9,color:"#7a90aa",display:"block",marginBottom:3}}>Echelle Y</label>
+        <div style={{display:"flex",gap:4,alignItems:"center"}}>
+          <select value={echelle} onChange={e=>setEchelle(e.target.value)} style={inpStyle}>
+            <option value="auto">Auto</option>
+            <option value="manuel">Manuel</option>
+          </select>
+          {echelle==="manuel" && <input type="number" min="1" value={maxManuel} onChange={e=>setMaxManuel(e.target.value)} style={{...inpStyle,width:70}}/>}
+        </div>
+      </div>
+      <button onClick={()=>{setSelectedCats([]);setFilterAnnee("Toutes");setSelectedAnnees([]);setFilterTrimestre("Tous");setFilterMois("Tous");setEchelle("auto");}}
         style={{background:"transparent",color:"#7a90aa",border:"1px solid #3d5270",borderRadius:7,padding:"6px 12px",fontSize:11,cursor:"pointer",fontFamily:"inherit"}}>
         Reset
       </button>
@@ -4148,17 +4523,17 @@ function DeivEvolutionStandaloneChart({ passages }) {
     <div style={{overflowX:"auto"}}>
       <svg viewBox={"0 0 "+W+" "+H} style={{width:"100%",maxWidth:W,display:"block"}}>
         {[0,25,50,75,100].map(pct=>{ const v=Math.round(maxVal*pct/100); const y=yVal(v); return(<g key={pct}><line x1={PAD} x2={W-PAD} y1={y} y2={y} stroke="#2d3f62" strokeWidth="1"/><text x={PAD-4} y={y+4} fontSize="9" fill="#5a7090" textAnchor="end">{v}</text></g>); })}
-        {catsActives.map(cat=>{
-          const col = cat==="__TOTAL__" ? "#a78bfa" : CAT_COLORS[cat];
-          const pts = stats.map((s,i)=>xPos(i)+","+yVal(s[cat]||0)).join(" ");
+        {MOIS_LABELS.map((lbl,mi)=>(<text key={mi} x={xMois(mi)} y={H-8} fontSize="8" fill="#5a7090" textAnchor="middle">{lbl}</text>))}
+        {statsParAnnee.map((sa)=>{
+          if (!sa.stats.length) return null;
+          const pts = sa.stats.map(x=>xMois(x.mois)+","+yVal(x.valeur)).join(" ");
           return (
-            <g key={cat}>
-              {stats.length>1&&<polyline points={pts} fill="none" stroke={col} strokeWidth="2" strokeLinejoin="round"/>}
-              {stats.map((s,i)=>(
+            <g key={sa.annee}>
+              {sa.stats.length>1&&<polyline points={pts} fill="none" stroke={sa.color} strokeWidth="2" strokeLinejoin="round"/>}
+              {sa.stats.map((x,i)=>(
                 <g key={i}>
-                  <circle cx={xPos(i)} cy={yVal(s[cat]||0)} r="4" fill={col} stroke="#1a2540" strokeWidth="1.5"/>
-                  {(s[cat]||0)>0 && <text x={xPos(i)} y={yVal(s[cat]||0)-9} fontSize="8" fill={col} textAnchor="middle">{s[cat]}</text>}
-                  {catsActives.indexOf(cat)===0 && <text x={xPos(i)} y={H-8} fontSize="8" fill="#5a7090" textAnchor="middle" transform={"rotate(-30 "+xPos(i)+" "+(H-8)+")"}>{(s.date||"").slice(0,5)}</text>}
+                  <circle cx={xMois(x.mois)} cy={yVal(x.valeur)} r="4" fill={sa.color} stroke="#1a2540" strokeWidth="1.5"/>
+                  {x.valeur>0 && <text x={xMois(x.mois)} y={yVal(x.valeur)-9} fontSize="8" fill={sa.color} textAnchor="middle">{x.valeur}</text>}
                 </g>
               ))}
             </g>
@@ -4166,12 +4541,12 @@ function DeivEvolutionStandaloneChart({ passages }) {
         })}
       </svg>
     </div>
-    {catsActives.length > 1 && (
+    {statsParAnnee.length > 0 && (
       <div style={{display:"flex",gap:16,marginTop:10,flexWrap:"wrap"}}>
-        {catsActives.map(cat=>(
-          <div key={cat} style={{display:"flex",alignItems:"center",gap:5}}>
-            <span style={{width:10,height:10,borderRadius:"50%",background:cat==="__TOTAL__"?"#a78bfa":CAT_COLORS[cat],display:"inline-block"}}/>
-            <span style={{fontSize:11,color:"#94a3b8"}}>{cat==="__TOTAL__"?"Total":cat}</span>
+        {statsParAnnee.map(sa=>(
+          <div key={sa.annee} style={{display:"flex",alignItems:"center",gap:5}}>
+            <svg width="24" height="4"><line x1="0" y1="2" x2="24" y2="2" stroke={sa.color} strokeWidth="2.5"/></svg>
+            <span style={{fontSize:11,color:sa.color,fontWeight:700}}>{sa.annee}</span>
           </div>
         ))}
       </div>
@@ -4232,15 +4607,18 @@ function DeivEvolutionStandaloneChart({ passages }) {
 
 
 function DeivParAppareilChart({ passages, postes }) {
-  const [selectedDeiv, setSelectedDeiv] = useState("");
-  const [filterAnnee, setFilterAnnee] = useState("Toutes");
-  const [selectedAnnees, setSelectedAnnees] = useState([]);
-  const [filterTrimestre, setFilterTrimestre] = useState("Tous");
-  const [filterMois, setFilterMois] = useState("Tous");
-  const [selectedCats, setSelectedCats] = useState([]);
-  const [showSeuils, setShowSeuils] = useState(true);
+  const [selectedDeiv, setSelectedDeiv] = usePersistedValue("DeivParAppareil_selectedDeiv", "");
+  const [filterAnnee, setFilterAnnee] = usePersistedValue("DeivParAppareil_filterAnnee", anneeDefaut(passages.filter(p=>p.type==="Insectes volants")));
+  const [selectedAnnees, setSelectedAnnees] = usePersistedValue("DeivParAppareil_selectedAnnees", []);
+  const [filterTrimestre, setFilterTrimestre] = usePersistedValue("DeivParAppareil_filterTrimestre", "Tous");
+  const [filterMois, setFilterMois] = usePersistedValue("DeivParAppareil_filterMois", "Tous");
+  const [selectedCats, setSelectedCats] = usePersistedValue("DeivParAppareil_selectedCats", []);
+  const [showSeuils, setShowSeuils] = usePersistedValue("DeivParAppareil_showSeuils", true);
   const [fullscreen, setFullscreen] = useState(false);
   const [collapsed, setCollapsed] = usePersistedCollapsed("DeivParAppareil", false);
+  const [echelle, setEchelle] = usePersistedValue("DeivParAppareil_echelle", "auto"); // auto | manuel
+  const [maxManuel, setMaxManuel] = usePersistedValue("DeivParAppareil_maxManuel", 20);
+  const [seuilCat, setSeuilCat] = usePersistedValue("DeivParAppareil_seuilCat", "auto"); // auto = suit les especes affichees, sinon un type precis
 
   const DEFAULT_SEUILS_IV = {
     Moucherons:   { leger:350, moyen:500 },
@@ -4333,9 +4711,17 @@ function DeivParAppareilChart({ passages, postes }) {
   }));
 
   const W = fullscreen ? 1100 : 700, H = fullscreen ? 420 : 260, PAD = 50;
-  const maxVal = Math.max(...stats.map(s=>s.total), ...statsParAnnee.flatMap(sa=>sa.stats.map(s=>s.total)), 1);
+  // Echelle verticale : auto (ajustee aux donnees) | manuel
+  // Seuils traces : soit le type choisi explicitement, soit les especes affichees
+  const seuilCats = seuilCat !== "auto" ? [seuilCat] : (selectedCats.length > 0 ? selectedCats : CATS);
+  const seuilRef = !showSeuils ? 0
+    : seuilCat !== "auto" ? ((seuilsIV[seuilCat]||{}).moyen || 0)
+    : (selectedCats.length === 1 && seuilsIV[selectedCats[0]]) ? seuilsIV[selectedCats[0]].moyen : 0;
+  const maxDonnees = Math.max(...stats.map(s=>s.total), ...statsParAnnee.flatMap(sa=>sa.stats.map(s=>s.total)), seuilRef, 1);
+  const maxAuto = Math.max(5, Math.ceil(maxDonnees*1.25/5)*5);
+  const maxVal = echelle === "manuel" ? Math.max(1, parseInt(maxManuel)||10) : maxAuto;
   function xPos(i) { return PAD + (stats.length > 1 ? i/(stats.length-1)*(W-PAD*2) : (W-PAD*2)/2); }
-  function yVal(v) { return H - PAD - (v/maxVal)*(H-PAD*2); }
+  function yVal(v) { return H - PAD - (Math.min(v,maxVal)/maxVal)*(H-PAD*2); }
   const inpStyle = { background:"#243352", border:"1px solid #3d5270", borderRadius:7, padding:"6px 10px", color:"#f1f5f9", fontSize:11, fontFamily:"inherit" };
 
   const deivPoste = deivList.find(d=>d.id===deivActif);
@@ -4344,8 +4730,8 @@ function DeivParAppareilChart({ passages, postes }) {
 
   function exportThisChart() {
     const W2=W, H2=H, PAD2=PAD;
-    const maxVal2 = Math.max(...stats.map(s=>s.total), ...statsParAnnee.flatMap(sa=>sa.stats.map(s=>s.total)), 1);
-    function yVal2(v) { return H2-PAD2-(v/maxVal2)*(H2-PAD2*2); }
+    const maxVal2 = maxVal;
+    function yVal2(v) { return H2-PAD2-(Math.min(v,maxVal2)/maxVal2)*(H2-PAD2*2); }
     let chartBody = "";
     if (statsParAnnee.length > 1) {
       chartBody = statsParAnnee.map(function(sa){
@@ -4428,7 +4814,24 @@ function DeivParAppareilChart({ passages, postes }) {
           {MOIS_LABELS.map((m,i)=><option key={i} value={i}>{m}</option>)}
         </select>
       </div>
-      <button onClick={()=>{setSelectedDeiv("");setFilterAnnee("Toutes");setSelectedAnnees([]);setFilterTrimestre("Tous");setFilterMois("Tous");setSelectedCats([]);}}
+      <div>
+        <label style={{fontSize:9,color:"#7a90aa",display:"block",marginBottom:3}}>Echelle Y</label>
+        <div style={{display:"flex",gap:4,alignItems:"center"}}>
+          <select value={echelle} onChange={e=>setEchelle(e.target.value)} style={inpStyle}>
+            <option value="auto">Auto</option>
+            <option value="manuel">Manuel</option>
+          </select>
+          {echelle==="manuel" && <input type="number" min="1" value={maxManuel} onChange={e=>setMaxManuel(e.target.value)} style={{...inpStyle,width:70}}/>}
+        </div>
+      </div>
+      <div>
+        <label style={{fontSize:9,color:"#7a90aa",display:"block",marginBottom:3}}>Seuil affiché</label>
+        <select value={seuilCat} onChange={e=>setSeuilCat(e.target.value)} style={inpStyle}>
+          <option value="auto">Espèces affichées</option>
+          {CATS.filter(c=>seuilsIV[c]).map(c=><option key={c} value={c}>{c}</option>)}
+        </select>
+      </div>
+      <button onClick={()=>{setSelectedDeiv("");setFilterAnnee("Toutes");setSelectedAnnees([]);setFilterTrimestre("Tous");setFilterMois("Tous");setSelectedCats([]);setEchelle("auto");setSeuilCat("auto");}}
         style={{background:"transparent",color:"#7a90aa",border:"1px solid #3d5270",borderRadius:7,padding:"6px 12px",fontSize:11,cursor:"pointer",fontFamily:"inherit"}}>
         Réinitialiser
       </button>
@@ -4457,16 +4860,20 @@ function DeivParAppareilChart({ passages, postes }) {
       <svg viewBox={"0 0 "+W+" "+H} style={{width:"100%",maxWidth:W,display:"block"}}>
         {[0,25,50,75,100].map(pct=>{ const v=Math.round(maxVal*pct/100); const y=yVal(v); return(<g key={pct}><line x1={PAD} x2={W-PAD} y1={y} y2={y} stroke="#2d3f62" strokeWidth="1"/><text x={PAD-4} y={y+4} fontSize="9" fill="#5a7090" textAnchor="end">{v}</text></g>); })}
         {showSeuils && (()=>{
-          const catsToShow = selectedCats.length===1 ? selectedCats : selectedCats.length>1 ? selectedCats : CATS;
+          const catsToShow = seuilCats;
           return catsToShow.filter(cat=>seuilsIV[cat]).map(cat=>{
             const sl = seuilsIV[cat].leger;
             const sm = seuilsIV[cat].moyen;
             const col = CAT_COLORS[cat]||"#f59e0b";
             return (<g key={cat}>
-              <line x1={PAD} x2={W-PAD} y1={yVal(sl)} y2={yVal(sl)} stroke={col} strokeWidth="1" strokeDasharray="5,3"/>
-              <text x={W-PAD+4} y={yVal(sl)+4} fontSize="8" fill={col}>{cat.slice(0,4)} {sl}</text>
-              <line x1={PAD} x2={W-PAD} y1={yVal(sm)} y2={yVal(sm)} stroke={col} strokeWidth="1.5" strokeDasharray="3,3" opacity="0.7"/>
-              <text x={W-PAD+4} y={yVal(sm)+4} fontSize="8" fill={col} opacity="0.7">{cat.slice(0,4)} {sm}</text>
+              {sl<=maxVal && (<>
+                <line x1={PAD} x2={W-PAD} y1={yVal(sl)} y2={yVal(sl)} stroke={col} strokeWidth="1" strokeDasharray="5,3"/>
+                <text x={W-PAD+4} y={yVal(sl)+4} fontSize="8" fill={col}>{cat.slice(0,4)} {sl}</text>
+              </>)}
+              {sm<=maxVal && (<>
+                <line x1={PAD} x2={W-PAD} y1={yVal(sm)} y2={yVal(sm)} stroke={col} strokeWidth="1.5" strokeDasharray="3,3" opacity="0.7"/>
+                <text x={W-PAD+4} y={yVal(sm)+4} fontSize="8" fill={col} opacity="0.7">{cat.slice(0,4)} {sm}</text>
+              </>)}
             </g>);
           });
         })()}
@@ -4474,7 +4881,7 @@ function DeivParAppareilChart({ passages, postes }) {
           if(sa.stats.length < 1) return null;
           const poly = sa.stats.map((s,i)=>{ const x=sa.stats.length>1?PAD+i/(sa.stats.length-1)*(W-PAD*2):W/2; return x+","+yVal(s.total); }).join(" ");
           return (<g key={sa.annee}>
-            {sa.stats.length>1&&<polyline points={poly} fill="none" stroke={sa.color} strokeWidth="2.5" strokeDasharray={ai>0?"6,3":""} strokeLinejoin="round"/>}
+            {sa.stats.length>1&&<polyline points={poly} fill="none" stroke={sa.color} strokeWidth="2.5" strokeLinejoin="round"/>}
             {sa.stats.map((s,i)=>{ const x=sa.stats.length>1?PAD+i/(sa.stats.length-1)*(W-PAD*2):W/2; return (<g key={i}><circle cx={x} cy={yVal(s.total)} r="4" fill={sa.color} stroke="#1a2540" strokeWidth="2"/>{s.total>0&&<text x={x} y={yVal(s.total)-9} fontSize="8" fill={sa.color} textAnchor="middle">{s.total}</text>}{ai===0&&<text x={x} y={H-8} fontSize="8" fill="#5a7090" textAnchor="middle" transform={"rotate(-30 "+x+" "+(H-8)+")"}>{(s.date||"").slice(0,5)}</text>}</g>); })}
           </g>);
         }) : (<g>
@@ -4489,7 +4896,7 @@ function DeivParAppareilChart({ passages, postes }) {
         </g>)}
       </svg>
     </div>
-    {statsParAnnee.length > 1 && (<div style={{display:"flex",gap:16,marginTop:10,flexWrap:"wrap"}}>{statsParAnnee.map((sa,i)=>(<div key={sa.annee} style={{display:"flex",alignItems:"center",gap:5}}><svg width="24" height="4"><line x1="0" y1="2" x2="24" y2="2" stroke={sa.color} strokeWidth="2.5" strokeDasharray={i>0?"6,3":"none"}/></svg><span style={{fontSize:11,color:sa.color,fontWeight:700}}>{sa.annee}</span></div>))}</div>)}
+    {statsParAnnee.length > 1 && (<div style={{display:"flex",gap:16,marginTop:10,flexWrap:"wrap"}}>{statsParAnnee.map((sa,i)=>(<div key={sa.annee} style={{display:"flex",alignItems:"center",gap:5}}><svg width="24" height="4"><line x1="0" y1="2" x2="24" y2="2" stroke={sa.color} strokeWidth="2.5"/></svg><span style={{fontSize:11,color:sa.color,fontWeight:700}}>{sa.annee}</span></div>))}</div>)}
     </>
   );
 
@@ -4556,12 +4963,15 @@ function TeignesEvolutionChart({ passages, postes }) {
   const selPostes = _sel;
   const setSelPostes = _setSel;
 
-  const [selectedAnnees, setSelectedAnnees] = useState([]);
-  const [showSeuils, setShowSeuils] = useState(true);
+  const [selectedAnnees, setSelectedAnnees] = usePersistedValue("TeignesEvolution_selectedAnnees", anneeDefaut(passages)==="Toutes" ? [] : [ANNEE_COURANTE]);
+  const [showSeuils, setShowSeuils] = usePersistedValue("TeignesEvolution_showSeuils", true);
   const [collapsed, setCollapsed] = usePersistedCollapsed("TeignesEvolution", false);
   const [fullscreen, setFullscreen] = useState(false);
+  const [echelle, setEchelle] = usePersistedValue("TeignesEvolution_echelle", "auto"); // auto | manuel
+  const [maxManuel, setMaxManuel] = usePersistedValue("TeignesEvolution_maxManuel", 150);
 
   const annees = [...new Set(passages.map(p=>(p.date||"").split("/")[2]).filter(Boolean))].sort();
+  const MOIS_LABELS = ["Jan.","Fév","Mar","Avr","Mai","Jun","Jul","Aoû","Sep","Oct","Nov","Dec"];
 
   const postesToShow = selPostes.length > 0 ? teignesPostes.filter(p=>selPostes.includes(p.id)) : teignesPostes;
 
@@ -4574,77 +4984,81 @@ function TeignesEvolutionChart({ passages, postes }) {
     return isNaN(v) ? null : v;
   }
 
-  function getAllDates(anneeFilter) {
-    return passages.filter(p=>{
-      const a = (p.date||"").split("/")[2];
-      if (anneeFilter && a !== anneeFilter) return false;
+  // Une courbe par annee. Valeur mensuelle = cumul des captures des pieges selectionnes.
+  function statsParMois(annee) {
+    const parMois = {};
+    passages.forEach(p=>{
+      const parts = (p.date||"").split("/");
+      if (parts.length !== 3) return;
+      if (parts[2] !== annee) return;
+      const m = parseInt(parts[1], 10) - 1;
+      if (isNaN(m) || m < 0 || m > 11) return;
       const saisies = typeof p.saisies==="string"?JSON.parse(p.saisies||"{}"):p.saisies||{};
-      return postesToShow.some(pt=>{ const s=saisies[pt.id]; return s && s.etat!==undefined && s.etat!==""; });
-    }).sort((a,b)=>{
-      const pd=d=>{const p=(d||"").split("/");return p.length===3?new Date(p[2]+"-"+p[1]+"-"+p[0]):new Date(0);};
-      return pd(a.date)-pd(b.date);
-    }).map(p=>p.date);
+      let somme = null;
+      postesToShow.forEach(pt=>{
+        const v = getVal(saisies, pt.id);
+        if (v === null) return;
+        somme = (somme===null?0:somme) + v;
+      });
+      if (somme === null) return;
+      parMois[m] = (parMois[m]||0) + somme;
+    });
+    return MOIS_LABELS.map((lbl,m)=>({ date: lbl, mois: m, val: parMois[m]===undefined ? null : parMois[m] }));
   }
 
-  function buildSeriesParPoste(anneeFilter) {
-    const dates = getAllDates(anneeFilter);
-    return postesToShow.map((pt,i)=>({
-      id: pt.id,
-      color: POSTE_COLORS[i % POSTE_COLORS.length],
-      data: dates.map(date=>{
-        const p = passages.find(x=>x.date===date);
-        if (!p) return { date, val: null };
-        const saisies = typeof p.saisies==="string"?JSON.parse(p.saisies||"{}"):p.saisies||{};
-        return { date, val: getVal(saisies, pt.id) };
-      })
-    }));
-  }
-
-  const anneeFilter = selectedAnnees.length===1 ? selectedAnnees[0] : null;
-  const dates = getAllDates(anneeFilter);
-  const series = buildSeriesParPoste(anneeFilter);
+  const anneesAffichees = selectedAnnees.length>0 ? [...selectedAnnees].sort() : annees;
+  const series = anneesAffichees.map((a,i)=>({ id: a, annee: a, color: ANNEE_COLORS[i % ANNEE_COLORS.length], data: statsParMois(a) }));
+  const axeLabels = MOIS_LABELS;
+  const aDesDonnees = series.some(s=>s.data.some(d=>d.val!==null));
 
   const SEUIL_LEGER = 100;
   const SEUIL_MOYEN = 150;
   const allVals = series.flatMap(s=>s.data.map(d=>d.val||0));
-  const maxVal = Math.max(...allVals, SEUIL_MOYEN, 10);
+  // Echelle verticale : auto (ajustee aux donnees) | manuel
+  const seuilRef = (showSeuils && selPostes.length===1) ? SEUIL_MOYEN : 0;
+  const maxDonnees = Math.max(...allVals, seuilRef, 10);
+  const maxAuto = Math.max(5, Math.ceil(maxDonnees*1.25/5)*5);
+  const maxVal = echelle === "manuel" ? Math.max(1, parseInt(maxManuel)||10) : maxAuto;
+  const inpStyle = { background:"#243352", border:"1px solid #3d5270", borderRadius:7, padding:"6px 10px", color:"#f1f5f9", fontSize:11, fontFamily:"inherit" };
 
-  function yVal(v) { return PAD + (H-PAD*2)*(1-v/maxVal); }
+  function yVal(v) { return PAD + (H-PAD*2)*(1-Math.min(v,maxVal)/maxVal); }
   function xPos(i, len) { return len>1 ? PAD+i/(len-1)*(W-PAD*2) : W/2; }
 
   function exportThisChart() {
     const labelStr = selectedAnnees.length>0 ? selectedAnnees.join(", ") : "Toutes années";
     const postesStr = selPostes.length>0 ? selPostes.join(", ") : "Tous les pieges teignes";
     const W2=W, H2=H, PAD2=PAD;
-    const maxVal2 = Math.max(...series.flatMap(s=>s.data.map(d=>d.val||0)), SEUIL_MOYEN, 10);
-    function yVal2(v){ return PAD2+(H2-PAD2*2)*(1-v/maxVal2); }
+    const maxVal2 = maxVal;
+    function yVal2(v){ return PAD2+(H2-PAD2*2)*(1-Math.min(v,maxVal2)/maxVal2); }
     function xPos2(i,len){ return len>1?PAD2+i/(len-1)*(W2-PAD2*2):W2/2; }
     // Grille
     let gridSvg = [0,25,50,75,100].map(pct=>{ const v=Math.round(maxVal2*pct/100); const y=yVal2(v); return "<line x1='"+PAD2+"' x2='"+(W2-PAD2)+"' y1='"+y+"' y2='"+y+"' stroke='#e5e7eb' stroke-width='1'/><text x='"+(PAD2-4)+"' y='"+(y+4)+"' font-size='9' fill='#94a3b8' text-anchor='end'>"+v+"</text>"; }).join("");
     // Seuils
     let seuilsSvg = "";
-    if (showSeuils && selPostes.length<=1) {
-      seuilsSvg = "<line x1='"+PAD2+"' x2='"+(W2-PAD2)+"' y1='"+yVal2(SEUIL_LEGER)+"' y2='"+yVal2(SEUIL_LEGER)+"' stroke='#f59e0b' stroke-dasharray='6,3' stroke-width='1.5'/><text x='"+(W2-PAD2+4)+"' y='"+(yVal2(SEUIL_LEGER)+4)+"' font-size='9' fill='#f59e0b'>Leger "+SEUIL_LEGER+"</text><line x1='"+PAD2+"' x2='"+(W2-PAD2)+"' y1='"+yVal2(SEUIL_MOYEN)+"' y2='"+yVal2(SEUIL_MOYEN)+"' stroke='#ef4444' stroke-dasharray='6,3' stroke-width='1.5'/><text x='"+(W2-PAD2+4)+"' y='"+(yVal2(SEUIL_MOYEN)+4)+"' font-size='9' fill='#ef4444'>Moyen "+SEUIL_MOYEN+"</text>";
+    if (showSeuils && selPostes.length===1) {
+      const svgLeger = SEUIL_LEGER<=maxVal2 ? "<line x1='"+PAD2+"' x2='"+(W2-PAD2)+"' y1='"+yVal2(SEUIL_LEGER)+"' y2='"+yVal2(SEUIL_LEGER)+"' stroke='#f59e0b' stroke-dasharray='6,3' stroke-width='1.5'/><text x='"+(W2-PAD2+4)+"' y='"+(yVal2(SEUIL_LEGER)+4)+"' font-size='9' fill='#f59e0b'>Leger "+SEUIL_LEGER+"</text>" : "";
+      const svgMoyen = SEUIL_MOYEN<=maxVal2 ? "<line x1='"+PAD2+"' x2='"+(W2-PAD2)+"' y1='"+yVal2(SEUIL_MOYEN)+"' y2='"+yVal2(SEUIL_MOYEN)+"' stroke='#ef4444' stroke-dasharray='6,3' stroke-width='1.5'/><text x='"+(W2-PAD2+4)+"' y='"+(yVal2(SEUIL_MOYEN)+4)+"' font-size='9' fill='#ef4444'>Moyen "+SEUIL_MOYEN+"</text>" : "";
+      seuilsSvg = svgLeger + svgMoyen;
     }
     // Dates en bas
-    const datesSvg = dates.map(function(d,i){ const x=xPos2(i,dates.length); return "<text x='"+x+"' y='"+(H2-6)+"' font-size='8' fill='#6b7280' text-anchor='middle' transform='rotate(-30 "+x+" "+(H2-6)+")'>"+(d||"").slice(0,5)+"</text>"; }).join("");
+    const datesSvg = axeLabels.map(function(d,i){ const x=xPos2(i,axeLabels.length); return "<text x='"+x+"' y='"+(H2-6)+"' font-size='8' fill='#6b7280' text-anchor='middle'>"+d+"</text>"; }).join("");
     // Courbes
     const linesSvg = series.map(function(s){
       const validPts = s.data.map((d,i)=>({...d,i})).filter(d=>d.val!==null);
       if (!validPts.length) return "";
-      const pts = validPts.map(d=>xPos2(d.i,dates.length)+","+yVal2(d.val)).join(" ");
-      const circles = validPts.map(d=>"<circle cx='"+xPos2(d.i,dates.length)+"' cy='"+yVal2(d.val)+"' r='4' fill='"+s.color+"' stroke='#fff' stroke-width='1'/>"+((d.val||0)>0?"<text x='"+xPos2(d.i,dates.length)+"' y='"+(yVal2(d.val)-8)+"' font-size='8' fill='"+s.color+"' text-anchor='middle'>"+d.val+"</text>":"")).join("");
+      const pts = validPts.map(d=>xPos2(d.i,axeLabels.length)+","+yVal2(d.val)).join(" ");
+      const circles = validPts.map(d=>"<circle cx='"+xPos2(d.i,axeLabels.length)+"' cy='"+yVal2(d.val)+"' r='4' fill='"+s.color+"' stroke='#fff' stroke-width='1'/>"+((d.val||0)>0?"<text x='"+xPos2(d.i,axeLabels.length)+"' y='"+(yVal2(d.val)-8)+"' font-size='8' fill='"+s.color+"' text-anchor='middle'>"+d.val+"</text>":"")).join("");
       return (validPts.length>1?"<polyline points='"+pts+"' fill='none' stroke='"+s.color+"' stroke-width='2'/>":"")+circles;
     }).join("");
     // Légende
-    let lx=PAD2; const legendSvg = series.map(function(s){ const poste=teignesPostes.find(p=>p.id===s.id); const label=s.id+(poste&&poste.zone?" - "+poste.zone:""); const out="<line x1='"+lx+"' x2='"+(lx+20)+"' y1='"+(H2-20)+"' y2='"+(H2-20)+"' stroke='"+s.color+"' stroke-width='2'/><text x='"+(lx+24)+"' y='"+(H2-16)+"' font-size='9' fill='"+s.color+"' font-weight='bold'>"+label+"</text>"; lx+=label.length*6+35; return out; }).join("");
-    const svgChart = "<svg width='"+W2+"' height='"+H2+"' xmlns='http://www.w3.org/2000/svg' style='background:#f9fafb;border-radius:8px;border:1px solid #e5e7eb'>"+gridSvg+seuilsSvg+linesSvg+datesSvg+"</svg>";
+    const legendSvg = series.map(function(s,i){ return "<line x1='"+(PAD2+i*70)+"' x2='"+(PAD2+i*70+20)+"' y1='14' y2='14' stroke='"+s.color+"' stroke-width='3'/><text x='"+(PAD2+i*70+25)+"' y='18' font-size='10' fill='"+s.color+"'>"+s.annee+"</text>"; }).join("");
+    const svgChart = "<svg width='"+W2+"' height='"+H2+"' xmlns='http://www.w3.org/2000/svg' style='background:#f9fafb;border-radius:8px;border:1px solid #e5e7eb'>"+gridSvg+seuilsSvg+linesSvg+datesSvg+legendSvg+"</svg>";
     // Tableau
-    const rows = dates.map(function(d,i){ return "<tr><td>"+d+"</td>"+series.map(function(s){ const pt=s.data[i]; return "<td style='font-weight:700;color:"+s.color+"'>"+(pt&&pt.val!==null?pt.val:"—")+"</td>"; }).join("")+"</tr>"; }).join("");
-    const headerCols = series.map(function(s){ return "<th>"+s.id+"</th>"; }).join("");
+    const rows = axeLabels.map(function(d,i){ return "<tr><td>"+d+"</td>"+series.map(function(s){ const pt=s.data[i]; return "<td style='font-weight:700;color:"+s.color+"'>"+(pt&&pt.val!==null?pt.val:"—")+"</td>"; }).join("")+"</tr>"; }).join("");
+    const headerCols = series.map(function(s){ return "<th>"+s.annee+"</th>"; }).join("");
     exportHTML("Évolution captures Teignes - "+CLIENT_CONFIG.nom,
       "<h1>Évolution captures Teignes</h1>"+
-      "<p style='color:#6b7280;margin-bottom:16px'>"+postesStr+" — "+labelStr+" — "+new Date().toLocaleDateString("fr-FR")+"</p>"+
+      "<p style='color:#6b7280;margin-bottom:16px'>"+postesStr+" — "+labelStr+" — Cumul mensuel — "+new Date().toLocaleDateString("fr-FR")+"</p>"+
       svgChart+
       "<table style='width:100%;border-collapse:collapse;margin-top:16px'><thead><tr><th>Date</th>"+headerCols+"</tr></thead><tbody>"+rows+"</tbody></table>"
     );
@@ -4687,6 +5101,16 @@ function TeignesEvolutionChart({ passages, postes }) {
           {selectedAnnees.length>0&&<button onClick={()=>setSelectedAnnees([])} style={{background:"transparent",color:"#ef4444",border:"1px solid #ef444433",borderRadius:6,padding:"6px 8px",fontSize:10,cursor:"pointer",fontFamily:"inherit"}}>x</button>}
         </div>
       </div>
+      <div>
+        <label style={{fontSize:9,color:"#7a90aa",display:"block",marginBottom:3}}>Echelle Y</label>
+        <div style={{display:"flex",gap:4,alignItems:"center"}}>
+          <select value={echelle} onChange={e=>setEchelle(e.target.value)} style={inpStyle}>
+            <option value="auto">Auto</option>
+            <option value="manuel">Manuel</option>
+          </select>
+          {echelle==="manuel" && <input type="number" min="1" value={maxManuel} onChange={e=>setMaxManuel(e.target.value)} style={{...inpStyle,width:70}}/>}
+        </div>
+      </div>
       <button onClick={()=>setShowSeuils(v=>!v)}
         style={{background:showSeuils?"#8b5cf622":"transparent",color:"#8b5cf6",border:"1px solid "+(showSeuils?"#8b5cf6":"#3d5270"),borderRadius:6,padding:"6px 10px",fontSize:10,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
         {showSeuils?"Masquer seuils":"Afficher seuils"}
@@ -4694,53 +5118,52 @@ function TeignesEvolutionChart({ passages, postes }) {
     </div>
   );
 
-  const bodyJsx = dates.length===0 || teignesPostes.length===0 ? (
+  const bodyJsx = !aDesDonnees || teignesPostes.length===0 ? (
     <div style={{textAlign:"center",color:"#5a7090",padding:30,fontSize:12}}>
       {teignesPostes.length===0 ? "Aucun poste Teignes trouve." : "Aucune donnee pour cette periode."}
     </div>
   ) : (
     <>
+    <div style={{marginBottom:8,fontSize:11,color:"#7a90aa"}}>Cumul mensuel des captures, une courbe par annee. Les seuils Leger/Moyen valent pour un releve : ils ne sont traces que si un seul piege est selectionne.</div>
     <div style={{overflowX:"auto"}}>
       <svg viewBox={"0 0 "+W+" "+H} style={{width:"100%",maxWidth:W,display:"block"}}>
         {[0,25,50,75,100].map(pct=>{ const v=Math.round(maxVal*pct/100); const y=yVal(v); return(<g key={pct}><line x1={PAD} x2={W-PAD} y1={y} y2={y} stroke="#2d3f62" strokeWidth="1"/><text x={PAD-4} y={y+4} fontSize="9" fill="#5a7090" textAnchor="end">{v}</text></g>); })}
-        {showSeuils && selPostes.length<=1 && (<>
-          <line x1={PAD} x2={W-PAD} y1={yVal(SEUIL_LEGER)} y2={yVal(SEUIL_LEGER)} stroke="#f59e0b" strokeWidth="1.5" strokeDasharray="6,3"/>
-          <text x={W-PAD+4} y={yVal(SEUIL_LEGER)+4} fontSize="9" fill="#f59e0b">Leger {SEUIL_LEGER}</text>
-          <line x1={PAD} x2={W-PAD} y1={yVal(SEUIL_MOYEN)} y2={yVal(SEUIL_MOYEN)} stroke="#ef4444" strokeWidth="1.5" strokeDasharray="6,3"/>
-          <text x={W-PAD+4} y={yVal(SEUIL_MOYEN)+4} fontSize="9" fill="#ef4444">Moyen {SEUIL_MOYEN}</text>
+        {showSeuils && selPostes.length===1 && (<>
+          {SEUIL_LEGER<=maxVal && (<>
+            <line x1={PAD} x2={W-PAD} y1={yVal(SEUIL_LEGER)} y2={yVal(SEUIL_LEGER)} stroke="#f59e0b" strokeWidth="1.5" strokeDasharray="6,3"/>
+            <text x={W-PAD+4} y={yVal(SEUIL_LEGER)+4} fontSize="9" fill="#f59e0b">Leger {SEUIL_LEGER}</text>
+          </>)}
+          {SEUIL_MOYEN<=maxVal && (<>
+            <line x1={PAD} x2={W-PAD} y1={yVal(SEUIL_MOYEN)} y2={yVal(SEUIL_MOYEN)} stroke="#ef4444" strokeWidth="1.5" strokeDasharray="6,3"/>
+            <text x={W-PAD+4} y={yVal(SEUIL_MOYEN)+4} fontSize="9" fill="#ef4444">Moyen {SEUIL_MOYEN}</text>
+          </>)}
         </>)}
-        {dates.map((d,i)=>(
-          <text key={i} x={xPos(i,dates.length)} y={H-8} fontSize="8" fill="#5a7090" textAnchor="middle" transform={"rotate(-30 "+xPos(i,dates.length)+" "+(H-8)+")"}>{d.slice(0,5)}</text>
+        {axeLabels.map((d,i)=>(
+          <text key={i} x={xPos(i,axeLabels.length)} y={H-8} fontSize="8" fill="#5a7090" textAnchor="middle">{d}</text>
         ))}
         {series.map((s)=>{
           const validPts = s.data.map((d,i)=>({...d,i})).filter(d=>d.val!==null);
           if (validPts.length===0) return null;
-          const polyPts = validPts.map(d=>xPos(d.i,dates.length)+","+yVal(d.val)).join(" ");
+          const polyPts = validPts.map(d=>xPos(d.i,axeLabels.length)+","+yVal(d.val)).join(" ");
           return (<g key={s.id}>
             {validPts.length>1&&<polyline points={polyPts} fill="none" stroke={s.color} strokeWidth="2" strokeLinejoin="round"/>}
             {validPts.map(d=>(
               <g key={d.i}>
-                <circle cx={xPos(d.i,dates.length)} cy={yVal(d.val)} r="4" fill={s.color} stroke="#1a2540" strokeWidth="2"/>
-                {d.val>0&&<text x={xPos(d.i,dates.length)} y={yVal(d.val)-8} fontSize="8" fill={s.color} textAnchor="middle">{d.val}</text>}
+                <circle cx={xPos(d.i,axeLabels.length)} cy={yVal(d.val)} r="4" fill={s.color} stroke="#1a2540" strokeWidth="2"/>
+                {d.val>0&&<text x={xPos(d.i,axeLabels.length)} y={yVal(d.val)-8} fontSize="8" fill={s.color} textAnchor="middle">{d.val}</text>}
               </g>
             ))}
           </g>);
         })}
       </svg>
     </div>
-    <div style={{display:"flex",gap:12,marginTop:10,flexWrap:"wrap"}}>
-      {series.map((s,i)=>{
-        const poste = teignesPostes.find(p=>p.id===s.id);
-        return (
-          <div key={s.id} style={{display:"flex",alignItems:"center",gap:5}}>
-            <svg width="20" height="4"><line x1="0" y1="2" x2="20" y2="2" stroke={s.color} strokeWidth="2"/></svg>
-            <div>
-              <span style={{fontSize:11,color:s.color,fontWeight:700}}>{s.id}</span>
-              {poste?.zone&&<span style={{fontSize:9,color:"#5a7090",marginLeft:4}}>{poste.zone}</span>}
-            </div>
-          </div>
-        );
-      })}
+    <div style={{display:"flex",gap:16,marginTop:10,flexWrap:"wrap"}}>
+      {series.map((s)=>(
+        <div key={s.id} style={{display:"flex",alignItems:"center",gap:5}}>
+          <svg width="24" height="4"><line x1="0" y1="2" x2="24" y2="2" stroke={s.color} strokeWidth="2.5"/></svg>
+          <span style={{fontSize:11,color:s.color,fontWeight:700}}>{s.annee}</span>
+        </div>
+      ))}
     </div>
     </>
   );
@@ -4792,10 +5215,12 @@ function TeignesEvolutionChart({ passages, postes }) {
 // GRAPHE PART TOXIQUE PAR MOIS
 // ============================================================
 function ToxiquePlaceboChart({ passages, postes }) {
-  const [filterAnnee, setFilterAnnee] = useState("Toutes");
-  const [selectedAnnees, setSelectedAnnees] = useState([]);
+  const [filterAnnee, setFilterAnnee] = usePersistedValue("ToxiquePlacebo_filterAnnee", anneeDefaut(passages.filter(p=>p.type!=="Insectes volants")));
+  const [selectedAnnees, setSelectedAnnees] = usePersistedValue("ToxiquePlacebo_selectedAnnees", []);
   const [fullscreen, setFullscreen] = useState(false);
   const [collapsed, setCollapsed] = usePersistedCollapsed("ToxiquePlacebo", false);
+  const [echelle, setEchelle] = usePersistedValue("ToxiquePlacebo_echelle", "plein"); // auto | manuel | plein
+  const [maxManuel, setMaxManuel] = usePersistedValue("ToxiquePlacebo_maxManuel", 50);
 
   const pd = d => { if(!d)return new Date(0); const p=(d||"").split("/"); return p.length===3?new Date(p[2]+"-"+p[1]+"-"+p[0]):new Date(d); };
   const MOIS_LABELS = ["Jan.","Fév","Mar","Avr","Mai","Jun","Jul","Aoû","Sep","Oct","Nov","Dec"];
@@ -4814,13 +5239,13 @@ function ToxiquePlaceboChart({ passages, postes }) {
       return true;
     });
 
-    // Regrouper par mois
+    // Regrouper par mois de l annee (0-11) pour superposer les annees
     const byMois = {};
     passagesFiltres.forEach(passage=>{
       const d=pd(passage.date);
-      const key = d.getFullYear()+"-"+(d.getMonth()+1).toString().padStart(2,"0");
-      const label = MOIS_LABELS[d.getMonth()]+" "+d.getFullYear();
-      if (!byMois[key]) byMois[key] = {key,label,toxique:0,placebo:0,total:0};
+      const key = d.getMonth();
+      const label = MOIS_LABELS[d.getMonth()];
+      if (!byMois[key]) byMois[key] = {key,mois:d.getMonth(),label,toxique:0,placebo:0,total:0};
       const saisies=typeof passage.saisies==="string"?JSON.parse(passage.saisies||"{}"):passage.saisies||{};
       postesRongeurs.forEach(poste=>{
         const s=saisies[poste.id];
@@ -4830,40 +5255,51 @@ function ToxiquePlaceboChart({ passages, postes }) {
         else byMois[key].toxique++;
       });
     });
-    return Object.values(byMois).sort((a,b)=>a.key.localeCompare(b.key)).filter(m=>m.total>0);
+    return Object.values(byMois).sort((a,b)=>a.mois-b.mois).filter(m=>m.total>0);
   }
 
-  const anneesAff = selectedAnnees.length>0 ? selectedAnnees.sort() : (filterAnnee!=="Toutes"?[parseInt(filterAnnee)]:[]);
-  const statsParAnnee = anneesAff.length>1 ? anneesAff.map((a,i)=>({annee:a,color:ANNEE_COLORS[i%ANNEE_COLORS.length],stats:buildStats(String(a))})) : [];
-  const stats = statsParAnnee.length<=1 ? buildStats(anneesAff.length===1?String(anneesAff[0]):null) : [];
+  const anneesAff = selectedAnnees.length>0 ? [...selectedAnnees].sort() : (filterAnnee!=="Toutes"?[parseInt(filterAnnee)]:annees);
+  const statsParAnnee = anneesAff.map((a,i)=>({annee:a,color:ANNEE_COLORS[i%ANNEE_COLORS.length],stats:buildStats(String(a))}));
+  const stats = [];
 
   const W=700, H=260, PAD=50;
 
-  function yPct(pct) { return PAD+(H-PAD*2)*(1-pct/100); }
+  // Echelle verticale : auto (ajustee aux donnees) | manuel | plein (0-100%)
+  const toutesValeurs = statsParAnnee.reduce((acc,sa)=>acc.concat(sa.stats.map(s=>s.total>0?Math.round(s.toxique/s.total*100):0)), []);
+  const maxDonnees = Math.max(...toutesValeurs, 1);
+  const maxAuto = Math.min(100, Math.max(5, Math.ceil(maxDonnees*1.25/5)*5));
+  const maxY = echelle === "plein" ? 100 : echelle === "manuel" ? Math.min(100, Math.max(1, parseInt(maxManuel)||100)) : maxAuto;
+  const graduations = [0, 0.25, 0.5, 0.75, 1].map(f => Math.round(maxY*f));
+  const showLigne50 = maxY >= 50;
+  const inpStyle = { background:"#243352", border:"1px solid #3d5270", borderRadius:7, padding:"6px 10px", color:"#f1f5f9", fontSize:11, fontFamily:"inherit" };
+
+  function yPct(pct) { return PAD+(H-PAD*2)*(1-Math.min(pct,maxY)/maxY); }
   function xPos(i,len) { return len>1?PAD+i/(len-1)*(W-PAD*2):W/2; }
+  function xMois(m) { return PAD + (m/11)*(W-PAD*2); }
 
   function buildSvgLines(dataStats, color, dashed) {
     if (dataStats.length===0) return "";
-    const pts = dataStats.map((s,i)=>{
+    const pts = dataStats.map((s)=>{
       const pct = s.total>0?Math.round(s.toxique/s.total*100):0;
-      return xPos(i,dataStats.length)+","+yPct(pct);
+      return xMois(s.mois)+","+yPct(pct);
     }).join(" ");
-    const circles = dataStats.map((s,i)=>{
+    const circles = dataStats.map((s)=>{
       const pct=s.total>0?Math.round(s.toxique/s.total*100):0;
-      const x=xPos(i,dataStats.length); const y=yPct(pct);
+      const x=xMois(s.mois); const y=yPct(pct);
       return "<circle cx='"+x+"' cy='"+y+"' r='4' fill='"+color+"' stroke='#1a2540' stroke-width='2'/>"
         +"<text x='"+x+"' y='"+(y-9)+"' font-size='8' fill='"+color+"' text-anchor='middle'>"+pct+"%</text>"
-        +"<text x='"+x+"' y='"+(H-8)+"' font-size='8' fill='#5a7090' text-anchor='middle' transform='rotate(-30 "+x+" "+(H-8)+")'>"+s.label.slice(0,7)+"</text>";
     }).join("");
     return (dataStats.length>1?"<polyline points='"+pts+"' fill='none' stroke='"+color+"' stroke-width='2.5'"+(dashed?" stroke-dasharray='6,3'":"")+"/>":"")+circles;
   }
 
   function exportThisChart() {
-    const grid = [0,25,50,75,100].map(pct=>{ const y=yPct(pct); return "<line x1='"+PAD+"' x2='"+(W-PAD)+"' y1='"+y+"' y2='"+y+"' stroke='#e5e7eb' stroke-width='1'/><text x='"+(PAD-4)+"' y='"+(y+4)+"' font-size='9' fill='#94a3b8' text-anchor='end'>"+pct+"%</text>"; }).join("");
-    const thresh50 = "<line x1='"+PAD+"' x2='"+(W-PAD)+"' y1='"+yPct(50)+"' y2='"+yPct(50)+"' stroke='#f59e0b' stroke-dasharray='5,3' stroke-width='1.5'/><text x='"+(W-PAD+4)+"' y='"+(yPct(50)+4)+"' font-size='9' fill='#f59e0b'>50%</text>";
-    const lines = statsParAnnee.length>1 ? statsParAnnee.map((sa,i)=>buildSvgLines(sa.stats,sa.color,i>0)).join("") : buildSvgLines(stats,"#ef4444",false);
+    const grid = graduations.map(v=>{ const y=yPct(v); return "<line x1='"+PAD+"' x2='"+(W-PAD)+"' y1='"+y+"' y2='"+y+"' stroke='#e5e7eb' stroke-width='1'/><text x='"+(PAD-4)+"' y='"+(y+4)+"' font-size='9' fill='#94a3b8' text-anchor='end'>"+v+"%</text>"; }).join("");
+    const thresh50 = showLigne50 ? "<line x1='"+PAD+"' x2='"+(W-PAD)+"' y1='"+yPct(50)+"' y2='"+yPct(50)+"' stroke='#f59e0b' stroke-dasharray='5,3' stroke-width='1.5'/><text x='"+(W-PAD+4)+"' y='"+(yPct(50)+4)+"' font-size='9' fill='#f59e0b'>50%</text>" : "";
+    const moisSvg = MOIS_LABELS.map(function(lbl,m){ return "<text x='"+xMois(m)+"' y='"+(H-8)+"' font-size='8' fill='#6b7280' text-anchor='middle'>"+lbl+"</text>"; }).join("");
+    const legende = statsParAnnee.map(function(sa,i){ return "<line x1='"+(PAD+i*70)+"' x2='"+(PAD+i*70+20)+"' y1='14' y2='14' stroke='"+sa.color+"' stroke-width='3'/><text x='"+(PAD+i*70+25)+"' y='18' font-size='10' fill='"+sa.color+"'>"+sa.annee+"</text>"; }).join("");
+    const lines = moisSvg + statsParAnnee.map((sa)=>buildSvgLines(sa.stats,sa.color,false)).join("") + legende;
     const svg = "<svg width='"+W+"' height='"+H+"' xmlns='http://www.w3.org/2000/svg' style='background:#f9fafb;border-radius:8px;border:1px solid #e5e7eb'>"+grid+thresh50+lines+"</svg>";
-    const src = statsParAnnee.length>1 ? statsParAnnee[0].stats : stats;
+    const src = statsParAnnee.reduce((acc,sa)=>acc.concat(sa.stats.map(x=>({...x,label:x.label+" "+sa.annee}))), []);
     const rows = src.map(s=>"<tr><td>"+s.label+"</td><td style='color:#ef4444;font-weight:700'>"+s.toxique+"</td><td style='color:#3b82f6;font-weight:700'>"+s.placebo+"</td><td style='font-weight:700'>"+Math.round(s.toxique/(s.total||1)*100)+"%</td></tr>").join("");
     exportChartCard("Part d'utilisation du toxique par mois", svg+"<table style='width:100%;border-collapse:collapse;margin-top:16px'><thead><tr><th style='padding:6px 10px;border:1px solid #e5e7eb'>Mois</th><th style='padding:6px 10px;border:1px solid #e5e7eb;color:#ef4444'>Toxique</th><th style='padding:6px 10px;border:1px solid #e5e7eb;color:#3b82f6'>Placebo</th><th style='padding:6px 10px;border:1px solid #e5e7eb'>% Toxique</th></tr></thead><tbody>"+rows+"</tbody></table>");
   }
@@ -4882,12 +5318,23 @@ function ToxiquePlaceboChart({ passages, postes }) {
             style={{background:isSel?ANNEE_COLORS[selectedAnnees.indexOf(a)%ANNEE_COLORS.length]:"#243352",color:isSel?"#fff":"#7a90aa",border:"1px solid "+(isSel?ANNEE_COLORS[selectedAnnees.indexOf(a)%ANNEE_COLORS.length]:"#3d5270"),borderRadius:6,padding:"5px 10px",fontSize:11,fontWeight:isSel?700:400,cursor:"pointer",fontFamily:"inherit"}}>{a}</button>); })}
         </div>
       </div>
-      <button onClick={()=>{setFilterAnnee("Toutes");setSelectedAnnees([]);}}
+      <div>
+        <label style={{fontSize:9,color:"#7a90aa",display:"block",marginBottom:3}}>Echelle Y</label>
+        <div style={{display:"flex",gap:4,alignItems:"center"}}>
+          <select value={echelle} onChange={e=>setEchelle(e.target.value)} style={inpStyle}>
+            <option value="auto">Auto</option>
+            <option value="manuel">Manuel</option>
+            <option value="plein">0-100%</option>
+          </select>
+          {echelle==="manuel" && <input type="number" min="1" max="100" value={maxManuel} onChange={e=>setMaxManuel(e.target.value)} style={{...inpStyle,width:70}}/>}
+        </div>
+      </div>
+      <button onClick={()=>{setFilterAnnee("Toutes");setSelectedAnnees([]);setEchelle("plein");}}
         style={{background:"transparent",color:"#7a90aa",border:"1px solid #3d5270",borderRadius:7,padding:"6px 12px",fontSize:11,cursor:"pointer",fontFamily:"inherit"}}>Reset</button>
     </div>
   );
 
-  const noData = stats.length===0 && statsParAnnee.length===0;
+  const noData = statsParAnnee.every(sa=>sa.stats.length===0);
 
   const bodyJsx = noData ? (
     <div style={{textAlign:"center",color:"#5a7090",padding:30,fontSize:12}}>Aucune donnée — saisissez les molécules (Toxique/Placebo) lors des passages.</div>
@@ -4896,22 +5343,23 @@ function ToxiquePlaceboChart({ passages, postes }) {
     <div style={{marginBottom:8,fontSize:11,color:"#7a90aa"}}>% de postes avec molécule toxique sur le total saisi ce mois — la ligne à 50% est le seuil équilibre.</div>
     <div style={{overflowX:"auto"}}>
       <svg viewBox={"0 0 "+W+" "+H} style={{width:"100%",maxWidth:W,display:"block"}}>
-        {[0,25,50,75,100].map(pct=>{ const y=yPct(pct); return(<g key={pct}><line x1={PAD} x2={W-PAD} y1={y} y2={y} stroke="#2d3f62" strokeWidth="1"/><text x={PAD-4} y={y+4} fontSize="9" fill="#5a7090" textAnchor="end">{pct}%</text></g>); })}
-        <line x1={PAD} x2={W-PAD} y1={yPct(50)} y2={yPct(50)} stroke="#f59e0b" strokeWidth="1.5" strokeDasharray="5,3"/>
-        <text x={W-PAD+4} y={yPct(50)+4} fontSize="9" fill="#f59e0b">50%</text>
-        {statsParAnnee.length>1 ? statsParAnnee.map((sa,ai)=>{
+        {graduations.map((v,gi)=>{ const y=yPct(v); return(<g key={gi}><line x1={PAD} x2={W-PAD} y1={y} y2={y} stroke="#2d3f62" strokeWidth="1"/><text x={PAD-4} y={y+4} fontSize="9" fill="#5a7090" textAnchor="end">{v}%</text></g>); })}
+        {showLigne50 && (<>
+          <line x1={PAD} x2={W-PAD} y1={yPct(50)} y2={yPct(50)} stroke="#f59e0b" strokeWidth="1.5" strokeDasharray="5,3"/>
+          <text x={W-PAD+4} y={yPct(50)+4} fontSize="9" fill="#f59e0b">50%</text>
+        </>)}
+        {MOIS_LABELS.map((lbl,mi)=>(<text key={mi} x={xMois(mi)} y={H-8} fontSize="8" fill="#5a7090" textAnchor="middle">{lbl}</text>))}
+        {statsParAnnee.map((sa)=>{
           if (!sa.stats.length) return null;
+          const poly = sa.stats.map(x=>xMois(x.mois)+","+yPct(x.total>0?Math.round(x.toxique/x.total*100):0)).join(" ");
           return (<g key={sa.annee}>
-            {sa.stats.length>1&&<polyline points={sa.stats.map((s,i)=>xPos(i,sa.stats.length)+","+yPct(s.total>0?Math.round(s.toxique/s.total*100):0)).join(" ")} fill="none" stroke={sa.color} strokeWidth="2.5" strokeDasharray={ai>0?"6,3":""} strokeLinejoin="round"/>}
-            {sa.stats.map((s,i)=>{ const pct=s.total>0?Math.round(s.toxique/s.total*100):0; const x=xPos(i,sa.stats.length); const y=yPct(pct); return(<g key={i}><circle cx={x} cy={y} r="4" fill={sa.color} stroke="#1a2540" strokeWidth="2"/><text x={x} y={y-9} fontSize="8" fill={sa.color} textAnchor="middle">{pct}%</text>{ai===0&&<text x={x} y={H-8} fontSize="8" fill="#5a7090" textAnchor="middle" transform={"rotate(-30 "+x+" "+(H-8)+")"}>{s.label.slice(0,7)}</text>}</g>); })}
+            {sa.stats.length>1&&<polyline points={poly} fill="none" stroke={sa.color} strokeWidth="2.5" strokeLinejoin="round"/>}
+            {sa.stats.map((x,i)=>{ const pct=x.total>0?Math.round(x.toxique/x.total*100):0; return (<g key={i}><circle cx={xMois(x.mois)} cy={yPct(pct)} r="4" fill={sa.color} stroke="#1a2540" strokeWidth="2"/><text x={xMois(x.mois)} y={yPct(pct)-9} fontSize="8" fill={sa.color} textAnchor="middle">{pct}%</text></g>); })}
           </g>);
-        }) : (<g>
-          {stats.length>1&&<polyline points={stats.map((s,i)=>xPos(i,stats.length)+","+yPct(s.total>0?Math.round(s.toxique/s.total*100):0)).join(" ")} fill="none" stroke="#ef4444" strokeWidth="2.5" strokeLinejoin="round"/>}
-          {stats.map((s,i)=>{ const pct=s.total>0?Math.round(s.toxique/s.total*100):0; const x=xPos(i,stats.length); const y=yPct(pct); return(<g key={i}><circle cx={x} cy={y} r="5" fill="#ef4444" stroke="#1a2540" strokeWidth="2"/><text x={x} y={y-9} fontSize="9" fill="#ef4444" textAnchor="middle">{pct}%</text><text x={x} y={H-8} fontSize="8" fill="#5a7090" textAnchor="middle" transform={"rotate(-30 "+x+" "+(H-8)+")"}>{s.label.slice(0,7)}</text></g>); })}
-        </g>)}
+        })}
       </svg>
     </div>
-    {statsParAnnee.length>1&&(<div style={{display:"flex",gap:16,marginTop:10,flexWrap:"wrap"}}>{statsParAnnee.map((sa,i)=>(<div key={sa.annee} style={{display:"flex",alignItems:"center",gap:5}}><svg width="24" height="4"><line x1="0" y1="2" x2="24" y2="2" stroke={sa.color} strokeWidth="2.5" strokeDasharray={i>0?"6,3":"none"}/></svg><span style={{fontSize:11,color:sa.color,fontWeight:700}}>{sa.annee}</span></div>))}</div>)}
+    {statsParAnnee.length>0&&(<div style={{display:"flex",gap:16,marginTop:10,flexWrap:"wrap"}}>{statsParAnnee.map((sa,i)=>(<div key={sa.annee} style={{display:"flex",alignItems:"center",gap:5}}><svg width="24" height="4"><line x1="0" y1="2" x2="24" y2="2" stroke={sa.color} strokeWidth="2.5"/></svg><span style={{fontSize:11,color:sa.color,fontWeight:700}}>{sa.annee}</span></div>))}</div>)}
     </>
   );
 
@@ -4942,8 +5390,8 @@ function ToxiquePlaceboChart({ passages, postes }) {
 }
 
 function MoleculesChart({ passages, postes }) {
-  const [filterAnnee, setFilterAnnee] = useState("Toutes");
-  const [selectedAnnees, setSelectedAnnees] = useState([]);
+  const [filterAnnee, setFilterAnnee] = usePersistedValue("Molecules_filterAnnee", anneeDefaut(passages));
+  const [selectedAnnees, setSelectedAnnees] = usePersistedValue("Molecules_selectedAnnees", []);
   const [fullscreen, setFullscreen] = useState(false);
   const [collapsed, setCollapsed] = usePersistedCollapsed("Molecules", false);
 
@@ -4972,11 +5420,12 @@ function MoleculesChart({ passages, postes }) {
         const s = saisies[poste.id];
         if (!s || !s.molecule) return;
         const mol = s.molecule;
+        if (mol === "Placebo") return; // le placebo n est pas une molecule biocide
         counts[mol] = (counts[mol]||0)+1;
       });
     });
     // Aussi depuis molecule_actuelle des postes (état actuel)
-    postesRongeurs.forEach(p=>{ if (p.molecule_actuelle) counts[p.molecule_actuelle] = (counts[p.molecule_actuelle]||0); });
+    postesRongeurs.forEach(p=>{ if (p.molecule_actuelle && p.molecule_actuelle !== "Placebo") counts[p.molecule_actuelle] = (counts[p.molecule_actuelle]||0); });
     return Object.entries(counts).sort((a,b)=>b[1]-a[1]);
   }
 
@@ -5234,10 +5683,10 @@ function Statistiques() {
           <div className="export-card-block"><DeivEvolutionStandaloneChart passages={passages} /></div>
           <div className="export-card-block"><TeignesEvolutionChart passages={passages} postes={postes} /></div>
           <div className="export-card-block"><DeivParAppareilChart passages={passages} postes={postes} /></div>
-          <div className="export-card-block"><ReinterPassagesChart passages={passages} reinterventions={reinterventions} anneeRef={anneeRef} /></div>
+          <div className="export-card-block"><ReinterPassagesChart passages={passages} reinterventions={reinterventions} /></div>
           <div className="export-card-block"><Top10PostesChart passages={passages} postes={postes} /></div>
           <div className="export-card-block"><PassagesParAnneeChart passages={passages} reinterventions={reinterventions} /></div>
-          <div className="export-card-block"><PlanActionsPieChart actions={actions} selectedAnnees={selectedAnnees} filterAnnee={filterAnnee} /></div>
+          <div className="export-card-block"><PlanActionsPieChart actions={actions} /></div>
           <div className="export-card-block"><PostesNuisiblePieChart postes={postes} /></div>
         </div>
       )}
@@ -5326,7 +5775,7 @@ function BarChartHorizontal({ data, title, chartKey, color }) {
 function EvolutionActionsChart({ actions }) {
   const [collapsed, setCollapsed] = usePersistedCollapsed("EvolutionActions", false);
   const [fullscreen, setFullscreen] = useState(false);
-  const [filterAnnee, setFilterAnnee] = useState("Toutes");
+  const [filterAnnee, setFilterAnnee] = usePersistedValue("EvolutionActions_filterAnnee", anneeDefaut(actions, "dateDetection"));
 
   const pd = d => { if(!d) return new Date(0); const p=(d||"").split("/"); return p.length===3?new Date(p[2]+"-"+p[1]+"-"+p[0]):new Date(d); };
   const MOIS_LABELS = ["Jan.","Fév","Mar","Avr","Mai","Jun","Jul","Aoû","Sep","Oct","Nov","Dec"];
@@ -5463,8 +5912,8 @@ function EvolutionActionsChart({ actions }) {
 function ComparaisonAnneesActionsChart({ actions }) {
   const [collapsed, setCollapsed] = usePersistedCollapsed("ComparaisonAnnees", false);
   const [fullscreen, setFullscreen] = useState(false);
-  const [mode, setMode] = useState("créées"); // créées | résolues
-  const [selectedAnnees, setSelectedAnnees] = useState([]);
+  const [mode, setMode] = usePersistedValue("ComparaisonAnneesActions_mode", "créées"); // créées | résolues
+  const [selectedAnnees, setSelectedAnnees] = usePersistedValue("ComparaisonAnneesActions_selectedAnnees", []);
 
   const pd = d => { if(!d) return new Date(0); const p=(d||"").split("/"); return p.length===3?new Date(p[2]+"-"+p[1]+"-"+p[0]):new Date(d); };
   const MOIS_LABELS = ["Jan.","Fév","Mar","Avr","Mai","Jun","Jul","Aoû","Sep","Oct","Nov","Dec"];
@@ -5614,7 +6063,7 @@ function ComparaisonAnneesActionsChart({ actions }) {
 function PrioriteActionsChart({ actions }) {
   const [collapsed, setCollapsed] = usePersistedCollapsed("PlanActions_Priorite", false);
   const [fullscreen, setFullscreen] = useState(false);
-  const [filterAnnee, setFilterAnnee] = useState("Toutes");
+  const [filterAnnee, setFilterAnnee] = usePersistedValue("PrioriteActions_filterAnnee", anneeDefaut(actions, "dateDetection"));
 
   const pd = d => { if(!d) return new Date(0); const p=(d||"").split("/"); return p.length===3?new Date(p[2]+"-"+p[1]+"-"+p[0]):new Date(d); };
   const annees = [...new Set(actions.map(a=>{ const d=pd(a.dateDetection); return d&&!isNaN(d)?d.getFullYear():null; }).filter(Boolean))].sort((a,b)=>a-b);
@@ -6404,10 +6853,12 @@ function SaisiePassage({ seuilsGlobaux, setSeuilsGlobaux, setReinterventions, se
   function initSaisiesAvecMolecule(saisiesData) {
     const enriched = {...saisiesData};
     postes.forEach(p=>{
-      if (p.molecule_actuelle && p.nuisible==="Rongeurs") {
-        if (!enriched[p.id]) enriched[p.id] = {};
-        if (!enriched[p.id].molecule) enriched[p.id].molecule = p.molecule_actuelle;
-      }
+      if ((p.nuisible||"Rongeurs")!=="Rongeurs") return;
+      if (!enriched[p.id]) enriched[p.id] = {};
+      // Molecule pre-remplie depuis la derniere saisie connue, Placebo par defaut
+      if (!enriched[p.id].molecule) enriched[p.id].molecule = p.molecule_actuelle || "Placebo";
+      // Etat pre-rempli sur Aucune : le poste compte comme controle sans clic
+      if (enriched[p.id].etat === undefined) enriched[p.id].etat = "";
     });
     return enriched;
   }
@@ -10123,14 +10574,6 @@ function GestionPostes({ postes, setPostes }) {
             Export Excel
           </button>
           <button onClick={()=>setShowAdd(v=>!v)} style={{background:"#1d4ed8",color:"#fff",border:"none",borderRadius:8,padding:"7px 14px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>+ Ajouter poste</button>
-          <button onClick={()=>{
-            if(!window.confirm("Supprimer TOUS les postes ? Cette action est irréversible.")) return;
-            setPrevPostes(postes);
-            postes.forEach(p=>sbDelete("postes",p.id));
-            setPostes([]);
-          }} style={{background:"#ef444411",color:"#ef4444",border:"1px solid #ef444433",borderRadius:8,padding:"7px 14px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
-            🗑 Supprimer tous les postes
-          </button>
         </div>
       </div>
       {showManageLists && (
@@ -10600,7 +11043,7 @@ function PlanImplantation({ seuilsGlobaux }) {
   const [selectedPostesToAdd, setSelectedPostesToAdd] = useState([]);
   const [movingPoste, setMovingPoste] = useState(null);
   const [showGestion, setShowGestion] = useState(false);
-  const [filterYear, setFilterYear]   = useState("Tous");
+  const [filterYear, setFilterYear]   = useState(null);
   const [showPlanEditor, setShowPlanEditor] = useState(false);
   const [editingDrawnPlan, setEditingDrawnPlan] = useState(null);
   const [planColors, setPlanColors] = useState(() => {
@@ -10789,16 +11232,26 @@ function PlanImplantation({ seuilsGlobaux }) {
   function getPassageStats(date) {
     const passagesDate = passages.filter(p=>p.date===date);
     if (!passagesDate.length) return {tot:0,part:0,ok:0,total:0};
-    const hasDeiv = passagesDate.some(p=>(p.type||"")==="Insectes volants");
-    const hasRongeurs = passagesDate.some(p=>(p.type||"")!=="Insectes volants");
-    // Sélectionner les postes pertinents selon le type de passage
-    const postesRelev = postes.filter(p=>{
-      const n = (p.nuisible||"Rongeurs");
-      const isIV = n==="Insectes volants";
-      if (hasDeiv && hasRongeurs) return true; // Mix → tous
-      if (hasDeiv) return isIV;
-      return !isIV;
+    // Ne compter que les postes reellement saisis ce jour la
+    const idsSaisis = {};
+    passagesDate.forEach(passage=>{
+      let saisies = {};
+      try { saisies = typeof passage.saisies==="string"?JSON.parse(passage.saisies||"{}"):(passage.saisies||{}); }
+      catch(_e) { saisies = {}; }
+      Object.keys(saisies).forEach(id=>{ idsSaisis[id] = true; });
     });
+    let postesRelev = postes.filter(p=>idsSaisis[p.id]);
+    if (postesRelev.length === 0) {
+      // Repli : aucune saisie exploitable, on retombe sur le type de passage
+      const hasDeiv = passagesDate.some(p=>(p.type||"")==="Insectes volants");
+      const hasRongeurs = passagesDate.some(p=>(p.type||"")!=="Insectes volants");
+      postesRelev = postes.filter(p=>{
+        const isIV = (p.nuisible||"Rongeurs")==="Insectes volants";
+        if (hasDeiv && hasRongeurs) return true;
+        if (hasDeiv) return isIV;
+        return !isIV;
+      });
+    }
     let tot=0, part=0;
     postesRelev.forEach(p=>{
       const col = getPosteColor(p, date);
@@ -10813,8 +11266,25 @@ function PlanImplantation({ seuilsGlobaux }) {
     const pd=d=>{const p=(d||"").split("/");return p.length===3?new Date(p[2]+"-"+p[1]+"-"+p[0]):new Date(0)};
     return pd(a)-pd(b);
   });
-  const years = [...new Set(allDates.map(d=>d.split("/")[2]).filter(Boolean))];
-  const filteredDates = filterYear==="Tous"?allDates:allDates.filter(d=>d.split("/")[2]===filterYear);
+  const years = [...new Set(allDates.map(d=>d.split("/")[2]).filter(Boolean))].sort((a,b)=>b-a);
+  const yearsKey = years.join(",");
+
+  // Annee affichee par defaut : l annee en cours si elle a des passages, sinon la plus recente
+  useEffect(() => {
+    if (filterYear === null && years.length > 0) {
+      const courante = String(new Date().getFullYear());
+      setFilterYear(years.indexOf(courante) !== -1 ? courante : years[0]);
+    }
+  }, [yearsKey]);
+
+  const filteredDates = (filterYear===null||filterYear==="Tous")?allDates:allDates.filter(d=>d.split("/")[2]===filterYear);
+
+  // Si la date selectionnee n appartient plus a l annee affichee, on la deselectionne
+  useEffect(() => {
+    if (selDate && filterYear && filterYear !== "Tous" && selDate.split("/")[2] !== filterYear) {
+      setSelDate(null);
+    }
+  }, [filterYear]);
 
   const planPostes = getPts(activePlan);
   const activePlanData = plans.find(p=>p.id===activePlan);
@@ -12234,28 +12704,16 @@ function Audit({ seuilsGlobaux }) {
                 </div>
                 <div>
                   <label style={{fontSize:9,color:"#7a90aa",fontWeight:600,textTransform:"uppercase",display:"block",marginBottom:4}}>Photos ({(obs.photos||[]).length})</label>
-                  <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-                    <label style={{background:"#243352",border:"1px dashed #3d5270",borderRadius:7,padding:"5px 12px",fontSize:10,color:"#7a90aa",cursor:"pointer"}}>
-                      📷 Photo
-                      <input type="file" accept="image/*" capture="environment" style={{display:"none"}} onChange={e=>{
-                        Array.from(e.target.files).forEach(file=>{
-                          const r=new FileReader();
-                          r.onload=ev=>setObsItems(prev=>prev.map(o=>o.id===obs.id?{...o,photos:[...(o.photos||[]),{url:ev.target.result,name:file.name}]}:o));
-                          r.readAsDataURL(file);
-                        });
-                      }}/>
-                    </label>
-                    <label style={{background:"#243352",border:"1px dashed #3d5270",borderRadius:7,padding:"5px 12px",fontSize:10,color:"#7a90aa",cursor:"pointer"}}>
-                      🖼 Galerie
-                      <input type="file" accept="image/*" multiple style={{display:"none"}} onChange={e=>{
-                        Array.from(e.target.files).forEach(file=>{
-                          const r=new FileReader();
-                          r.onload=ev=>setObsItems(prev=>prev.map(o=>o.id===obs.id?{...o,photos:[...(o.photos||[]),{url:ev.target.result,name:file.name}]}:o));
-                          r.readAsDataURL(file);
-                        });
-                      }}/>
-                    </label>
-                  </div>
+                  <label style={{background:"#243352",border:"1px dashed #3d5270",borderRadius:7,padding:"5px 12px",fontSize:10,color:"#7a90aa",cursor:"pointer"}}>
+                    + Ajouter photos
+                    <input type="file" accept="image/*" capture="environment" multiple style={{display:"none"}} onChange={e=>{
+                      Array.from(e.target.files).forEach(file=>{
+                        const r=new FileReader();
+                        r.onload=ev=>setObsItems(prev=>prev.map(o=>o.id===obs.id?{...o,photos:[...(o.photos||[]),{url:ev.target.result,name:file.name}]}:o));
+                        r.readAsDataURL(file);
+                      });
+                    }}/>
+                  </label>
                     {(obs.photos||[]).length>0&&(
                     <div style={{display:"flex",flexWrap:"wrap",gap:5,marginTop:6}}>
                       {(obs.photos||[]).map((ph,j)=>(
@@ -12886,20 +13344,6 @@ export default function App() {
 
 function AppPortail({ isAdmin, onLogout }) {
   window.__isAdmin = isAdmin;
-  const [activeSite, setActiveSite] = useState(() => {
-    try { return localStorage.getItem("aads_active_site") || SITES_VERGERS[0]; } catch(e) { return SITES_VERGERS[0]; }
-  });
-
-  function changeActiveSite(site) {
-    setActiveSite(site);
-    try { localStorage.setItem("aads_active_site", site); } catch(_e) { return; }
-    // Mettre à jour CLIENT_CONFIG.site
-    CLIENT_CONFIG.site = site;
-  }
-
-  // Initialiser le site au démarrage
-  useEffect(() => { CLIENT_CONFIG.site = activeSite; }, [activeSite]);
-
   const [page, setPage] = useState("dashboard");
   const [reinterventions, setReinterventions] = useState(REINIT_INIT);
   const [passagesGlobaux, setPassagesGlobaux] = useState([]);
@@ -12964,9 +13408,18 @@ function AppPortail({ isAdmin, onLogout }) {
   const [, forceConfigUpdate] = useState(0);
 
   useEffect(() => {
-    sbFetch("config_client?id=eq.main", "GET").then(data => {
+    sbFetch("config_client?order=id.asc", "GET").then(data => {
       if (data && data.length > 0) {
-        const cfg = data[0];
+        SITES_DISPO = data.map(x => ({ id: x.id, site: x.site || x.id }));
+        const choisi = data.filter(x => x.id === SITE_ACTIF)[0] || data[0];
+        // Premier passage sur ce navigateur : on fixe le site et on recharge une fois,
+        // sinon les chargements deja partis auraient tourne sans filtre de site.
+        if (SITE_ACTIF !== choisi.id) {
+          try { window.localStorage.setItem("aads_site_actif", choisi.id); } catch(_e) { return; }
+          window.location.reload();
+          return;
+        }
+        const cfg = choisi;
         if (cfg.nom) CLIENT_CONFIG.nom = cfg.nom;
         if (cfg.contrat) CLIENT_CONFIG.contrat = cfg.contrat;
         if (cfg.site) CLIENT_CONFIG.site = cfg.site;
@@ -13130,19 +13583,6 @@ function AppPortail({ isAdmin, onLogout }) {
               <div onClick={()=>setShowParametres(true)} style={{ fontSize: 10, color: CLIENT_CONFIG.nom?"#94a3b8":"#f59e0b", fontWeight: 600, flex:1, cursor:"pointer" }} title="Cliquer pour modifier les paramètres client">{CLIENT_CONFIG.nom ? "⚙ Paramètres" : "⚙ Configurer le client"}</div>
               <span style={{fontSize:9,fontWeight:700,background:isAdmin?"#1d4ed822":"#22c55e22",color:isAdmin?"#3b82f6":"#22c55e",border:"1px solid "+(isAdmin?"#3b82f644":"#22c55e44"),borderRadius:4,padding:"1px 6px"}}>{isAdmin?"Admin":"Client"}</span>
               <button onClick={onLogout} title="Se déconnecter" style={{background:"transparent",border:"1px solid #3d5270",borderRadius:6,color:"#7a90aa",fontSize:11,cursor:"pointer",padding:"2px 7px",fontFamily:"inherit"}}>⏻</button>
-            </div>
-          </div>
-
-          {/* SÉLECTEUR DE SITE */}
-          <div style={{padding:"8px 12px",borderBottom:"1px solid #24335244"}}>
-            <div style={{fontSize:9,color:"#7a90aa",fontWeight:600,textTransform:"uppercase",marginBottom:6}}>Site actif</div>
-            <div style={{display:"flex",flexDirection:"column",gap:3}}>
-              {SITES_VERGERS.map(site=>(
-                <button key={site} onClick={()=>changeActiveSite(site)}
-                  style={{background:activeSite===site?"#1d4ed8":"transparent",color:activeSite===site?"#fff":"#7a90aa",border:"1px solid "+(activeSite===site?"#3b82f6":"#3d5270"),borderRadius:6,padding:"5px 10px",fontSize:10,fontWeight:activeSite===site?700:400,cursor:"pointer",fontFamily:"inherit",textAlign:"left"}}>
-                  {site}
-                </button>
-              ))}
             </div>
           </div>
 
