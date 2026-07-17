@@ -818,14 +818,30 @@ function Dashboard({ onNav, reinterventions, onLogoClick, onParamsClick, passage
             : <div onClick={onLogoClick} title="Cliquer pour ajouter le logo du client"
                 style={{ height:56, width:56, borderRadius:8, background:"rgba(255,255,255,0.08)", border:"2px dashed #5a7090", display:"flex", alignItems:"center", justifyContent:"center", cursor:"pointer", fontSize:22, color:"#7a90aa" }}>+</div>}
           <div style={{ fontSize: 24, fontWeight: 800, color: "#f1f5f9" }}>{CLIENT_CONFIG.nom}</div>
-          {SITES_DISPO.length > 1 && (
-            <select value={SITE_ACTIF} onChange={e=>changerSite(e.target.value)} title="Changer de site"
-              style={{background:"#8b5cf6",color:"#fff",border:"2px solid #c4b5fd",borderRadius:10,padding:"8px 14px",fontSize:16,fontWeight:800,fontFamily:"inherit",cursor:"pointer",letterSpacing:0.5}}>
-              {SITES_DISPO.map(s=>(
-                <option key={s.id} value={s.id} style={{background:"#243352",color:"#f1f5f9",fontWeight:600}}>{s.site}</option>
-              ))}
-            </select>
-          )}
+          {SITES_DISPO.length > 1 && (()=>{
+            const courant = SITES_DISPO.filter(s=>s.id===SITE_ACTIF)[0] || SITES_DISPO[0];
+            return (
+              <div title="Changer de site" style={{ position:"relative", display:"inline-flex", alignItems:"center", gap:10,
+                background:"rgba(139,92,246,0.14)", border:"1px solid rgba(139,92,246,0.55)", borderRadius:11,
+                padding:"7px 12px 7px 14px", cursor:"pointer" }}>
+                <div style={{ width:3, alignSelf:"stretch", borderRadius:2, background:"#8b5cf6", marginRight:2 }}/>
+                <div style={{ display:"flex", flexDirection:"column", lineHeight:1.2, pointerEvents:"none" }}>
+                  <span style={{ fontSize:8, fontWeight:700, color:"#a78bfa", letterSpacing:1.4, textTransform:"uppercase" }}>Site</span>
+                  <span style={{ fontSize:15, fontWeight:800, color:"#f1f5f9", whiteSpace:"nowrap" }}>{courant ? courant.site : ""}</span>
+                </div>
+                <svg width="11" height="7" viewBox="0 0 11 7" style={{ pointerEvents:"none", marginLeft:2 }}>
+                  <path d="M1 1L5.5 5.5L10 1" stroke="#a78bfa" strokeWidth="1.8" fill="none" strokeLinecap="round" strokeLinejoin="round"/>
+                </svg>
+                <select value={SITE_ACTIF} onChange={e=>changerSite(e.target.value)}
+                  style={{ position:"absolute", inset:0, width:"100%", height:"100%", opacity:0, cursor:"pointer",
+                           border:"none", appearance:"none", fontFamily:"inherit" }}>
+                  {SITES_DISPO.map(s=>(
+                    <option key={s.id} value={s.id} style={{background:"#243352",color:"#f1f5f9",fontWeight:600}}>{s.site}</option>
+                  ))}
+                </select>
+              </div>
+            );
+          })()}
         </div>
         <div style={{ fontSize: 13, color: "#7a90aa", display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
           <span>{CLIENT_CONFIG.type_site} - Contrat N {CLIENT_CONFIG.contrat}</span>
