@@ -214,6 +214,10 @@ async function sbGet(table) {
   return sbFetch(table + "?contrat=eq." + CLIENT_CONFIG.contrat + filtreSite(table) + "&order=id.asc", "GET");
 }
 async function sbUpsert(table, data) {
+  if (tableParSite(table) && !SITE_ACTIF) {
+    console.error("Ecriture refusee sur " + table + " : aucun site actif. La ligne serait orpheline.");
+    return null;
+  }
   const d = !tableParSite(table) ? data
     : Array.isArray(data) ? data.map(x => ({ ...x, site: (x && x.site) || SITE_ACTIF }))
     : { ...data, site: (data && data.site) || SITE_ACTIF };
@@ -225,13 +229,25 @@ async function sbUpdate(table, id, data) {
 // Variante stricte : leve une exception en cas d'echec HTTP reel, avec le detail de l'erreur Supabase.
 // A utiliser uniquement la ou l'appelant gere explicitement l'echec (ex: ajout de postes sur un plan).
 async function sbUpsertStrict(table, data) {
+  // Un SITE_ACTIF vide passerait la contrainte NOT NULL avec la chaine vide, mais
+  // filtreSite relit sur "__non_defini__" : la ligne serait ecrite puis invisible.
+  if (tableParSite(table) && !SITE_ACTIF) {
+    const errSite = new Error("Aucun site actif : ecriture refusee sur " + table + ". Rechargez le portail et choisissez un site.");
+    errSite.status = 0;
+    throw errSite;
+  }
+  // Meme injection du site que sbUpsert : sans elle, toute table de TABLES_PAR_SITE
+  // part avec site null et se fait rejeter par la contrainte NOT NULL (code 23502).
+  const d = !tableParSite(table) ? data
+    : Array.isArray(data) ? data.map(x => ({ ...x, site: (x && x.site) || SITE_ACTIF }))
+    : { ...data, site: (data && data.site) || SITE_ACTIF };
   const headers = {
     apikey: SUPABASE_KEY,
     Authorization: "Bearer " + SUPABASE_KEY,
     "Content-Type": "application/json",
     Prefer: "resolution=merge-duplicates,return=representation",
   };
-  const res = await fetch(SUPABASE_URL + "/rest/v1/" + table, { method: "POST", headers, body: JSON.stringify(data) });
+  const res = await fetch(SUPABASE_URL + "/rest/v1/" + table, { method: "POST", headers, body: JSON.stringify(d) });
   if (!res.ok) {
     const errText = await res.text().catch(() => "");
     console.error("Supabase error:", res.status, errText);
@@ -250,7 +266,7 @@ async function sbDelete(table, id) {
 // (contrainte unique en base sur contrat+poste_id). Si le poste existe deja ailleurs, on le
 // deplace (UPDATE plan_id+x+y) au lieu de tenter un INSERT qui echouerait en doublon.
 async function savePostePosition(planId, posteId, x, y) {
-  const posData = { id: planId+"_"+posteId, poste_id:posteId, plan_id:planId, x, y, contrat:CLIENT_CONFIG.contrat };
+  const posData = { id: planId+"_"+posteId, poste_id:posteId, plan_id:planId, x, y, contrat:CLIENT_CONFIG.contrat, site:SITE_ACTIF };
 
   // Hors ligne — sauvegarder en attente
   if (!navigator.onLine) {
@@ -271,7 +287,7 @@ async function savePostePosition(planId, posteId, x, y) {
       "Content-Type": "application/json",
       Prefer: "return=representation",
     };
-    const url = SUPABASE_URL + "/rest/v1/poste_positions?poste_id=eq." + encodeURIComponent(posteId) + "&contrat=eq." + CLIENT_CONFIG.contrat;
+    const url = SUPABASE_URL + "/rest/v1/poste_positions?poste_id=eq." + encodeURIComponent(posteId) + "&contrat=eq." + CLIENT_CONFIG.contrat + filtreSite("poste_positions");
     const res = await fetch(url, { method: "PATCH", headers, body: JSON.stringify({ id: planId + "_" + posteId, plan_id: planId, x, y }) });
     if (!res.ok) {
       const errText = await res.text().catch(() => "");
