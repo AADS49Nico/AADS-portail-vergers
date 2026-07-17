@@ -11122,7 +11122,24 @@ function PlanImplantation({ seuilsGlobaux }) {
       sbGet("plans_dessines").catch(()=>[]),
     ]).then(([planImgs, planDessines]) => {
       const imgPlans = (planImgs||[]).map(p=>({...p, img: p.img_url || p.img}));
-      const dessines = (planDessines||[]).map(d=>({id:"dessine_"+d.id, label:d.label, img:null, dessine:true, elements: typeof d.elements==="string"?JSON.parse(d.elements||"[]"):(d.elements||[]), backgroundImg: d.background_img||null}));
+      const parseEls = e => typeof e==="string" ? JSON.parse(e||"[]") : (e||[]);
+      const dessines = [];
+      (planDessines||[]).forEach(d=>{
+        // Une ligne plans_dessines qui porte le meme id qu une ligne plans est une
+        // annotation en place : on enrichit le plan existant au lieu de creer un
+        // second plan, sinon poste_positions.plan_id pointerait dans le vide.
+        var base = imgPlans.filter(p=>String(p.id)===String(d.id))[0];
+        if (base) {
+          base.dessine = true;
+          base.annote = true;
+          base.elements = parseEls(d.elements);
+          base.backgroundImg = d.background_img || base.img;
+          base.img = null; // le rendu passe par la branche SVG, sinon les annotations sont masquees
+          if (d.label) base.label = d.label;
+        } else {
+          dessines.push({id:"dessine_"+d.id, label:d.label, img:null, dessine:true, elements: parseEls(d.elements), backgroundImg: d.background_img||null});
+        }
+      });
       const allPlans = [...imgPlans, ...dessines];
       if (allPlans.length > 0) {
         setPlans(allPlans);
@@ -11407,7 +11424,11 @@ function PlanImplantation({ seuilsGlobaux }) {
     const plan = plans.find(p=>p.id===id);
     if(!window.confirm("Supprimer le plan \""+(plan?plan.label:id)+"\" et toutes ses pastilles ?")) return;
     setPlans(prev=>prev.filter(p=>p.id!==id));
-    if (plan && plan.dessine) {
+    if (plan && plan.annote) {
+      // Plan annote : une ligne plans (image) + une ligne plans_dessines (annotations).
+      sbDelete("plans_dessines", id);
+      sbDelete("plans", id);
+    } else if (plan && plan.dessine) {
       sbDelete("plans_dessines", id.replace("dessine_",""));
     } else {
       sbDelete("plans",id);
@@ -11923,8 +11944,27 @@ function PlanImplantation({ seuilsGlobaux }) {
             <button onClick={()=>{
               const activePlanData = plans.find(p=>p.id===activePlan);
               if (!activePlanData) return;
-              // Ouvrir PlanEditor avec l'image du plan actif comme fond
-              setEditingDrawnPlan(null);
+              const fond = activePlanData.backgroundImg || activePlanData.img || null;
+              if (String(activePlan).indexOf("dessine_") === 0) {
+                // Plan dessine autonome : sa ligne plans_dessines porte l id sans le
+                // prefixe. Le renvoyer prefixe creerait une ligne neuve, donc un doublon.
+                setEditingDrawnPlan({
+                  id: String(activePlan).replace("dessine_",""),
+                  label: activePlanData.label,
+                  elements: activePlanData.elements || [],
+                  backgroundImg: fond,
+                });
+              } else {
+                // Annotation en place d un plan image : meme id, les pastilles restent
+                // rattachees, et on rouvre avec les annotations deja posees.
+                setEditingDrawnPlan({
+                  id: activePlan,
+                  label: activePlanData.label,
+                  elements: activePlanData.elements || [],
+                  backgroundImg: fond,
+                  __overwriteImgPlan: activePlan,
+                });
+              }
               setShowPlanEditor(true);
             }}
               style={{background:"transparent",color:"#f59e0b",border:"1px solid #3d5270",borderRadius:7,padding:"5px 10px",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
@@ -11953,11 +11993,11 @@ function PlanImplantation({ seuilsGlobaux }) {
             </button>
 
             {/* Modifier le dessin (plans dessinés) */}
-            {plans.find(p=>p.id===activePlan)?.dessine && (
+            {plans.find(p=>p.id===activePlan)?.dessine && !plans.find(p=>p.id===activePlan)?.annote && (
               <button onClick={()=>{
                 const activePlanData = plans.find(p=>p.id===activePlan);
                 const original = activePlanData.id.replace("dessine_","");
-                setEditingDrawnPlan({id:original, label:activePlanData.label, elements:activePlanData.elements});
+                setEditingDrawnPlan({id:original, label:activePlanData.label, elements:activePlanData.elements, backgroundImg:activePlanData.backgroundImg||null});
                 setShowPlanEditor(true);
               }} style={{background:"#8b5cf622",color:"#8b5cf6",border:"1px solid #8b5cf644",borderRadius:7,padding:"5px 10px",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
                 Modifier le dessin
@@ -11983,13 +12023,13 @@ function PlanImplantation({ seuilsGlobaux }) {
             onSaved={(saved)=>{
               const overwriteId = editingDrawnPlan && editingDrawnPlan.__overwriteImgPlan;
               if (overwriteId) {
-                // Annotation d'un plan image existant : on remplace le plan original par sa version annotee
-                sbDelete("plans", overwriteId);
-                const updatedPlan = {id: overwriteId, label: saved.label, img: saved.backgroundImg || activePlanData.img, dessine: true, elements: saved.elements, backgroundImg: saved.backgroundImg || activePlanData.img};
+                // Annotation en place. La ligne plans est conservee : elle porte l image
+                // et l id auquel poste_positions se rattache. PlanEditor a deja ecrit la
+                // ligne plans_dessines sous ce meme id, il n y a rien a upserter ici.
+                const fond = saved.backgroundImg || (activePlanData && activePlanData.img) || null;
+                const updatedPlan = {id: overwriteId, label: saved.label, img: null, dessine: true, annote: true, elements: saved.elements, backgroundImg: fond};
                 setPlans(prev=>prev.map(p=>p.id===overwriteId?updatedPlan:p));
-                sbUpsert("plans_dessines", {id: saved.id, contrat: CLIENT_CONFIG.contrat, label: saved.label, elements: JSON.stringify(saved.elements), background_img: saved.backgroundImg||activePlanData.img});
                 setActivePlanPersisted(overwriteId);
-                // Remap positions vers le nouvel id si besoin (meme id donc rien a faire)
               } else {
                 const newPlan = {id:"dessine_"+saved.id, label:saved.label, img:null, dessine:true, elements:saved.elements, backgroundImg:saved.backgroundImg};
                 setPlans(prev=>{
