@@ -552,6 +552,24 @@ function inpBlue(extra) {
 }
 
 // ============================================================
+// CONSOMMATION APPAT - vocabulaire unique
+// Trois ecritures coexistent dans les donnees et designent le meme fait
+// (appat entierement consomme) : "Totale" produit par la saisie passage,
+// "CONSOMMATION TOTALE" produit par la saisie plan et les imports SQL,
+// "100%" present dans les exports et les anciennes lignes Supabase.
+// Toute classification de consommation passe par ces trois fonctions.
+// ============================================================
+export function estConsoTotale(v) {
+  return v === "Totale" || v === "CONSOMMATION TOTALE" || v === "100%";
+}
+export function estConsoPartielle(v) {
+  return v === "25%" || v === "50%" || v === "75%" || v === "CONSOMMATION PARTIELLE";
+}
+export function estConsoQuelconque(v) {
+  return estConsoTotale(v) || estConsoPartielle(v);
+}
+
+// ============================================================
 // EXPORT PDF
 // ============================================================
 const PDF_CSS = `*{margin:0;padding:0;box-sizing:border-box;}body{font-family:Arial,sans-serif;font-size:11px;color:#243352;background:#fff;padding:15mm;}@page{size:A4;margin:15mm 12mm;}.page-break{page-break-before:always;}h1{font-size:18px;color:#0f2864;font-weight:800;border-bottom:3px solid #0f2864;padding-bottom:8px;margin-bottom:16px;}h2{font-size:13px;font-weight:800;color:#0f2864;border-left:4px solid #0f2864;padding-left:8px;margin:16px 0 10px;text-transform:uppercase;}table{width:100%;border-collapse:collapse;margin-bottom:14px;font-size:10px;}th{background:#0f2864;color:#fff;padding:6px 8px;text-align:left;font-size:9px;text-transform:uppercase;font-weight:700;}td{padding:5px 8px;border-bottom:1px solid #e2e8f0;}tr:nth-child(even) td{background:#f8fafc;}.badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:9px;font-weight:700;}.green{background:#dcfce7;color:#16a34a;}.orange{background:#fef3c7;color:#d97706;}.red{background:#fee2e2;color:#dc2626;}.tot{color:#dc2626;font-weight:700;}.par{color:#d97706;font-weight:700;}.ok{color:#16a34a;}.footer{border-top:1px solid #e2e8f0;padding-top:8px;margin-top:20px;font-size:9px;color:#94a3b8;display:flex;justify-content:space-between;}.kpi-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:16px;}.kpi{background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:8px;text-align:center;}.kpi-v{font-size:18px;font-weight:900;color:#0f2864;}.kpi-l{font-size:9px;color:#7a90aa;margin-top:2px;}`;
@@ -703,12 +721,11 @@ function Dashboard({ onNav, reinterventions, onLogoClick, onParamsClick, passage
   const passagesSource = passagesSuivi.length > 0 ? passagesSuivi.map(p => {
     const saisies = typeof p.saisies==="string" ? JSON.parse(p.saisies||"{}") : (p.saisies||{});
     const anomalies = Object.values(saisies).filter(s => s && (
-      s.etat==="Totale"||s.etat==="CONSOMMATION TOTALE"||s.etat==="75%"||
-      s.etat==="50%"||s.etat==="25%"||s.etat==="CONSOMMATION PARTIELLE"||
+      estConsoQuelconque(s.etat)||
       (parseInt(s.cap_souris||0)+parseInt(s.cap_ratBrun||0)+parseInt(s.cap_ratNoir||0))>0
     )).length;
-    const conso_totale = Object.values(saisies).filter(s => s && (s.etat==="Totale"||s.etat==="CONSOMMATION TOTALE")).length;
-    const conso_partielle = Object.values(saisies).filter(s => s && (s.etat==="25%"||s.etat==="50%"||s.etat==="75%"||s.etat==="CONSOMMATION PARTIELLE")).length;
+    const conso_totale = Object.values(saisies).filter(s => s && estConsoTotale(s.etat)).length;
+    const conso_partielle = Object.values(saisies).filter(s => s && estConsoPartielle(s.etat)).length;
     return { ...p, anomalies, conso_totale, conso_partielle, total: Object.keys(saisies).length, statut: p.statut||"Terminé" };
   }) : PASSAGES;
 
@@ -1137,7 +1154,7 @@ function Interventions({ reinterventions, setReinterventions, passagesGlobaux, s
           <button onClick={() => {
             const passagesRows = passagesAnnee.map(p => {
               const saisiesP = typeof p.saisies==="string"?JSON.parse(p.saisies||"{}"):p.saisies||{};
-              const ct = p.conso_totale ?? Object.values(saisiesP).filter(s=>s&&(s.etat==="Totale"||s.etat==="CONSOMMATION TOTALE")).length;
+              const ct = p.conso_totale ?? Object.values(saisiesP).filter(s=>s&&estConsoTotale(s.etat)).length;
               const cp = p.conso_partielle ?? Object.values(saisiesP).filter(s=>s&&(s.etat==="25%"||s.etat==="50%"||s.etat==="75%"||s.etat==="CONSOMMATION PARTIELLE")).length;
               const tot = p.total ?? Object.keys(saisiesP).length;
               return "<tr><td>"+p.date+"</td><td>"+tot+"</td><td style='color:#dc2626;font-weight:700'>"+ct+"</td><td style='color:#d97706;font-weight:700'>"+cp+"</td><td>"+(p.statut||"")+"</td></tr>";
@@ -1224,7 +1241,7 @@ function Interventions({ reinterventions, setReinterventions, passagesGlobaux, s
               const p = event;
               // Calculer les stats à la volée depuis les saisies
               const saisiesP = typeof p.saisies==="string"?JSON.parse(p.saisies||"{}"):p.saisies||{};
-              const conso_totale = p.conso_totale ?? Object.values(saisiesP).filter(s=>s&&(s.etat==="Totale"||s.etat==="CONSOMMATION TOTALE")).length;
+              const conso_totale = p.conso_totale ?? Object.values(saisiesP).filter(s=>s&&estConsoTotale(s.etat)).length;
               const conso_partielle = p.conso_partielle ?? Object.values(saisiesP).filter(s=>s&&(s.etat==="25%"||s.etat==="50%"||s.etat==="75%"||s.etat==="CONSOMMATION PARTIELLE")).length;
               const anomalies = p.anomalies ?? (conso_totale + conso_partielle + Object.values(saisiesP).filter(s=>s&&(parseInt(s.cap_souris||0)+parseInt(s.cap_ratBrun||0)+parseInt(s.cap_ratNoir||0))>0).length);
               // Postes controles = postes reellement presents dans les saisies
@@ -1323,11 +1340,11 @@ function Interventions({ reinterventions, setReinterventions, passagesGlobaux, s
                             <div style={{ display:"flex", flexWrap:"wrap", gap:5 }}>
                               {actifs.map(a => {
                                 const e = a.passages[p.date];
-                                const c = e === "CONSOMMATION TOTALE" ? "#ef4444" : "#f59e0b";
+                                const c = estConsoTotale(e) ? "#ef4444" : "#f59e0b";
                                 return (
                                   <div key={a.id} style={{ background:"#1a2540", border:"1px solid "+c+"44", borderRadius:6, padding:"3px 8px", fontSize:11 }}>
                                     <span style={{ color:"#f1f5f9", fontWeight:700 }}>{a.id}</span>
-                                    <span style={{ color:c, marginLeft:5, fontSize:10 }}>{e==="CONSOMMATION TOTALE"?"TOT":"PAR"}</span>
+                                    <span style={{ color:c, marginLeft:5, fontSize:10 }}>{estConsoTotale(e)?"TOT":"PAR"}</span>
                                   </div>
                                 );
                               })}
@@ -1504,7 +1521,7 @@ function Cartographie({ seuilsGlobaux }) {
     const s = merged[posteId];
     if (!s) return { type:"vide", valeur:"" };
     // Rongeurs - consommation : on garde le pourcentage reel
-    if (s.etat === "Totale" || s.etat === "CONSOMMATION TOTALE") return { type:"totale", valeur:"100%" };
+    if (estConsoTotale(s.etat)) return { type:"totale", valeur:"100%" };
     if (s.etat === "75%" || s.etat === "50%" || s.etat === "25%") return { type:"partielle", valeur:s.etat };
     if (s.etat === "CONSOMMATION PARTIELLE") return { type:"partielle", valeur:"" };
     // Rongeurs - captures
@@ -1628,7 +1645,7 @@ function Cartographie({ seuilsGlobaux }) {
       const s = seuilsDyn[nuisible];
       return s ? (num >= s.critique ? "#ef4444" : num >= s.vigilance ? "#f59e0b" : "#22c55e") : "#22c55e";
     }
-    if (v === "CONSOMMATION TOTALE" || v === "Totale") return "#ef4444";
+    if (estConsoTotale(v)) return "#ef4444";
     if (v === "CONSOMMATION PARTIELLE") return "#f59e0b";
     if (v === "75%" || v === "50%" || v === "25%") return "#f59e0b";
     if (v && !isNaN(parseFloat(v)) && parseFloat(v) > 0) return "#f59e0b";
@@ -1757,7 +1774,7 @@ function Cartographie({ seuilsGlobaux }) {
                   if (!v) return { l: <span style={{ color: c }}>—</span>, c };
                   return { l: <span style={{ color: c, fontWeight: 700 }}>{v}</span>, c };
                 }
-                if (v === "CONSOMMATION TOTALE" || v === "Totale") return { l: <span style={{ color: c, fontWeight: 700 }}>TOT</span>, c };
+                if (estConsoTotale(v)) return { l: <span style={{ color: c, fontWeight: 700 }}>TOT</span>, c };
                 if (v === "CONSOMMATION PARTIELLE") return { l: <span style={{ color: c, fontWeight: 700 }}>PAR</span>, c };
                 if (v === "75%" || v === "50%" || v === "25%") return { l: <span style={{ color: c, fontWeight: 700 }}>{v}</span>, c };
                 if (v && !isNaN(parseFloat(v)) && parseFloat(v) > 0) return { l: <span style={{ color: c, fontWeight: 700 }}>{v}</span>, c };
@@ -1812,7 +1829,7 @@ function Cartographie({ seuilsGlobaux }) {
               const nuisible = (displaySel.nuisible || "Rongeurs");
               const isPlaceboToxique = appat === "placebo" || appat === "toxique";
               const isGlueRongeur = (appat === "glue") && nuisible === "Rongeurs";
-              const c = val === "CONSOMMATION TOTALE" ? "#ef4444" : val === "CONSOMMATION PARTIELLE" ? "#f59e0b" : "#22c55e";
+              const c = estConsoTotale(val) ? "#ef4444" : estConsoPartielle(val) ? "#f59e0b" : "#22c55e";
               return (
                 <div key={d} style={{ background: "#1a2540", borderRadius: 8, padding: "8px 12px", borderLeft: "3px solid " + c, marginBottom: 6 }} onClick={e => e.stopPropagation()}>
                   <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom: 4 }}>
@@ -3122,8 +3139,8 @@ function Top10PostesChart({ passages, postes }) {
       if(nuisible==="Rongeurs"){
         const etat=s.etat||"";
         const cap=(parseInt(s.cap_souris||0))+(parseInt(s.cap_ratBrun||0))+(parseInt(s.cap_ratNoir||0));
-        const isTouche = etat==="Totale"||etat==="CONSOMMATION TOTALE"||etat==="75%"||etat==="50%"||etat==="25%"||etat==="CONSOMMATION PARTIELLE"||cap>0;
-        if(etat==="Totale"||etat==="75%")scoreParPoste[id].score+=3;
+        const isTouche = estConsoQuelconque(etat)||cap>0;
+        if(estConsoTotale(etat)||etat==="75%")scoreParPoste[id].score+=3;
         else if(etat==="50%"||etat==="25%")scoreParPoste[id].score+=2;
         else if(cap>0)scoreParPoste[id].score+=3;
         scoreParPoste[id].captures+=cap;
@@ -3488,7 +3505,7 @@ function TauxActiviteChart({ passages, postes }) {
       if (!s) return;
       const etat = s.etat||"";
       const capR = (parseInt(s.cap_souris||0))+(parseInt(s.cap_ratBrun||0))+(parseInt(s.cap_ratNoir||0));
-      const isActif = etat==="Totale"||etat==="CONSOMMATION TOTALE"||etat==="75%"||etat==="50%"||etat==="25%"||etat==="CONSOMMATION PARTIELLE"||capR>0;
+      const isActif = estConsoQuelconque(etat)||capR>0;
       if (isActif) actifs++;
     });
     const tauxActivite = total > 0 ? Math.round(actifs/total*100) : 0;
@@ -4099,7 +4116,7 @@ function PostesTouchesChart({ passages, postes }) {
       if (!s) return;
       const etat = s.etat||"";
       const capR = (parseInt(s.cap_souris||0))+(parseInt(s.cap_ratBrun||0))+(parseInt(s.cap_ratNoir||0));
-      const isTouche = etat==="Totale"||etat==="CONSOMMATION TOTALE"||etat==="75%"||etat==="50%"||etat==="25%"||etat==="CONSOMMATION PARTIELLE"||capR>0;
+      const isTouche = estConsoQuelconque(etat)||capR>0;
       if (isTouche) touches++;
     });
     return { date: passage.date, touches };
@@ -5603,7 +5620,7 @@ function Statistiques() {
       if (!s) return; // poste non saisi = considere non actif, mais compte dans le total
       const etat = s.etat||"";
       const capR = (parseInt(s.cap_souris||0))+(parseInt(s.cap_ratBrun||0))+(parseInt(s.cap_ratNoir||0));
-      const isActif = etat==="Totale"||etat==="CONSOMMATION TOTALE"||etat==="75%"||etat==="50%"||etat==="25%"||etat==="CONSOMMATION PARTIELLE"||capR>0;
+      const isActif = estConsoQuelconque(etat)||capR>0;
       if (!isNaN(parseFloat(etat)) && parseFloat(etat)>0) captures += parseFloat(etat);
       captures += capR;
       if (isActif) actifs++;
@@ -6886,8 +6903,8 @@ function SaisiePassage({ seuilsGlobaux, setSeuilsGlobaux, setReinterventions, se
     const nuisible = p.nuisible||"Rongeurs";
     if (nuisible==="Rongeurs") {
       const total = (parseInt(s.cap_souris||0))+(parseInt(s.cap_ratBrun||0))+(parseInt(s.cap_ratNoir||0));
-      if (total >= seuils.rongeurs.capture_rouge || s.etat==="75%" || s.etat==="Totale") return "#ef4444";
-      if (s.etat==="25%" || s.etat==="50%") return "#f59e0b";
+      if (total >= seuils.rongeurs.capture_rouge || estConsoTotale(s.etat) || s.etat==="75%") return "#ef4444";
+      if (estConsoPartielle(s.etat)) return "#f59e0b";
       return "#22c55e";
     }
     if (nuisible==="Blattes") {
@@ -11160,7 +11177,7 @@ function PlanImplantation({ seuilsGlobaux }) {
     const consoRouge  = seuilsGlobaux?.rongeurs?.conso_rouge  || "75%";
     const NIVEAUX = ["25%","50%","75%","Totale","CONSOMMATION TOTALE","CONSOMMATION PARTIELLE"];
     function niveauIdx(n) {
-      if (n==="Totale"||n==="CONSOMMATION TOTALE") return 4;
+      if (estConsoTotale(n)) return 4;
       if (n==="75%") return 3;
       if (n==="50%") return 2;
       if (n==="25%"||n==="CONSOMMATION PARTIELLE") return 1;
