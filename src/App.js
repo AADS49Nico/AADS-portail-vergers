@@ -813,7 +813,10 @@ function Dashboard({ onNav, reinterventions, onLogoClick, onParamsClick, passage
         <div style={{position:"absolute",right:60,bottom:-40,width:120,height:120,borderRadius:"50%",background:"rgba(255,255,255,0.03)",pointerEvents:"none"}}/>
         <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600, letterSpacing: 1.5, textTransform: "uppercase", marginBottom: 10 }}>Portail Client Sanitation</div>
         <div style={{ display:"flex", alignItems:"center", gap:16, marginBottom: 4 }}>
-          {TOQUE_LOGO && <img src={TOQUE_LOGO} alt="Logo client" onClick={onLogoClick} style={{ height:56, width:"auto", objectFit:"contain", borderRadius:8, background:"rgba(255,255,255,0.08)", padding:4, cursor:"pointer" }} title="Cliquer pour modifier le logo"/>}
+          {TOQUE_LOGO
+            ? <img src={TOQUE_LOGO} alt="Logo client" onClick={onLogoClick} style={{ height:56, width:"auto", objectFit:"contain", borderRadius:8, background:"rgba(255,255,255,0.08)", padding:4, cursor:"pointer" }} title="Cliquer pour modifier le logo"/>
+            : <div onClick={onLogoClick} title="Cliquer pour ajouter le logo du client"
+                style={{ height:56, width:56, borderRadius:8, background:"rgba(255,255,255,0.08)", border:"2px dashed #5a7090", display:"flex", alignItems:"center", justifyContent:"center", cursor:"pointer", fontSize:22, color:"#7a90aa" }}>+</div>}
           <div style={{ fontSize: 24, fontWeight: 800, color: "#f1f5f9" }}>{CLIENT_CONFIG.nom}</div>
           {SITES_DISPO.length > 1 && (
             <select value={SITE_ACTIF} onChange={e=>changerSite(e.target.value)} title="Changer de site"
@@ -12918,6 +12921,81 @@ function NavBtn({ id, label, page, setPage, narrow }) {
 // ============================================================
 // PARAMÈTRES CLIENT
 // ============================================================
+// Gestion des sites. config_client tient lieu de table des sites : une ligne par site,
+// id = code du site, site = libelle affiche dans le selecteur de l en-tete.
+function SitesTab() {
+  const [sites, setSites] = useState([]);
+  const [code, setCode] = useState("");
+  const [libelle, setLibelle] = useState("");
+  const [msg, setMsg] = useState("");
+
+  function recharger() {
+    sbFetch("config_client?order=id.asc", "GET").then(d => setSites(Array.isArray(d) ? d : []));
+  }
+  useEffect(() => { recharger(); }, []);
+
+  function ajouter() {
+    var c = (code||"").trim().toUpperCase().replace(/[^A-Z0-9_-]/g, "");
+    if (!c) { setMsg("Le code du site est obligatoire."); return; }
+    if (sites.filter(s => s.id === c).length > 0) { setMsg("Le code " + c + " existe deja."); return; }
+    var modele = sites[0] || {};
+    sbUpsert("config_client", {
+      id: c,
+      site: (libelle||"").trim() || c,
+      nom: modele.nom || CLIENT_CONFIG.nom,
+      contrat: modele.contrat || CLIENT_CONFIG.contrat,
+      type_site: modele.type_site || "",
+      date_debut: modele.date_debut || "",
+      date_fin: modele.date_fin || "",
+      passages_an: modele.passages_an || 12,
+      seuil_vigilance: modele.seuil_vigilance || 5,
+      seuil_critique: modele.seuil_critique || 10,
+    }).then(() => { setCode(""); setLibelle(""); setMsg("Site " + c + " cree. Il apparait dans le selecteur en haut."); recharger(); });
+  }
+
+  function renommer(s) {
+    var v = window.prompt("Nouveau libelle pour le site " + s.id + " :", s.site || s.id);
+    if (v === null) return;
+    sbUpsert("config_client", { ...s, site: v.trim() || s.id })
+      .then(() => { setMsg("Libelle mis a jour. Recharge la page pour le voir dans le selecteur."); recharger(); });
+  }
+
+  function supprimer(s) {
+    if (s.id === SITE_ACTIF) { setMsg("Impossible de supprimer le site en cours. Bascule sur un autre site avant."); return; }
+    if (sites.length <= 1) { setMsg("Il doit rester au moins un site."); return; }
+    if (!window.confirm("Supprimer le site " + s.id + " ?\n\nSes postes, passages et plans restent en base mais deviennent inaccessibles depuis le portail. Confirmer ?")) return;
+    sbDelete("config_client", s.id).then(() => { setMsg("Site " + s.id + " retire."); recharger(); });
+  }
+
+  var inp = { background:"#1a2540", border:"1px solid #3d5270", borderRadius:8, padding:"8px 10px", color:"#f1f5f9", fontSize:12, fontFamily:"inherit" };
+  return (
+    <div>
+      <div style={{ fontSize:11, color:"#7a90aa", marginBottom:14 }}>Chaque site est independant : ses postes, passages, plans, actions et seuils lui sont propres. Le selecteur en haut de page permet de basculer.</div>
+      {sites.map(s => (
+        <div key={s.id} style={{ display:"flex", alignItems:"center", gap:8, background:"#243352", borderRadius:9, padding:"9px 12px", marginBottom:7, border:"1px solid " + (s.id===SITE_ACTIF ? "#8b5cf6" : "#3d5270") }}>
+          <div style={{ flex:1 }}>
+            <span style={{ fontSize:13, fontWeight:700, color:"#f1f5f9" }}>{s.site || s.id}</span>
+            <span style={{ fontSize:10, color:"#5a7090", marginLeft:8 }}>code {s.id}</span>
+            {s.id===SITE_ACTIF && <span style={{ fontSize:9, fontWeight:700, color:"#8b5cf6", marginLeft:8 }}>SITE EN COURS</span>}
+          </div>
+          <button onClick={()=>renommer(s)} style={{ background:"transparent", color:"#7a90aa", border:"1px solid #3d5270", borderRadius:6, padding:"4px 10px", fontSize:11, cursor:"pointer", fontFamily:"inherit" }}>Renommer</button>
+          <button onClick={()=>supprimer(s)} style={{ background:"transparent", color:"#ef4444", border:"1px solid #ef444455", borderRadius:6, padding:"4px 10px", fontSize:11, cursor:"pointer", fontFamily:"inherit" }}>Retirer</button>
+        </div>
+      ))}
+      <div style={{ marginTop:16, paddingTop:16, borderTop:"1px solid #3d5270" }}>
+        <div style={{ fontSize:12, fontWeight:700, color:"#f1f5f9", marginBottom:8 }}>Ajouter un site</div>
+        <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+          <input value={code} onChange={e=>setCode(e.target.value)} placeholder="Code (ex BEAUFORT)" style={{ ...inp, width:170 }}/>
+          <input value={libelle} onChange={e=>setLibelle(e.target.value)} placeholder="Libelle affiche" style={{ ...inp, flex:1, minWidth:150 }}/>
+          <button onClick={ajouter} style={{ background:"#8b5cf6", color:"#fff", border:"none", borderRadius:8, padding:"8px 16px", fontSize:12, fontWeight:700, cursor:"pointer", fontFamily:"inherit" }}>Ajouter</button>
+        </div>
+        <div style={{ fontSize:10, color:"#5a7090", marginTop:6 }}>Le code est definitif : il marque toutes les donnees du site en base. Lettres, chiffres, tiret et souligne uniquement.</div>
+      </div>
+      {msg && <div style={{ marginTop:12, fontSize:11, color:"#22c55e" }}>{msg}</div>}
+    </div>
+  );
+}
+
 function ParametresModal({ onClose }) {
   const [form, setForm] = useState({
     nom: CLIENT_CONFIG.nom,
@@ -13041,7 +13119,10 @@ function ParametresModal({ onClose }) {
         <div style={{ display:"flex", gap:6, marginBottom:20, background:"#243352", borderRadius:9, padding:3, width:"fit-content" }}>
           <button onClick={()=>setTab("client")} style={{ background:tab==="client"?"#1d4ed8":"transparent", color:tab==="client"?"#fff":"#94a3b8", border:"none", borderRadius:7, padding:"7px 16px", fontSize:12, fontWeight:600, cursor:"pointer", fontFamily:"inherit" }}>Client</button>
           <button onClick={()=>setTab("aads")} style={{ background:tab==="aads"?"#1d4ed8":"transparent", color:tab==="aads"?"#fff":"#94a3b8", border:"none", borderRadius:7, padding:"7px 16px", fontSize:12, fontWeight:600, cursor:"pointer", fontFamily:"inherit" }}>AADS</button>
+          <button onClick={()=>setTab("sites")} style={{ background:tab==="sites"?"#8b5cf6":"transparent", color:tab==="sites"?"#fff":"#94a3b8", border:"none", borderRadius:7, padding:"7px 16px", fontSize:12, fontWeight:600, cursor:"pointer", fontFamily:"inherit" }}>Sites</button>
         </div>
+
+        {tab==="sites" && <SitesTab/>}
 
         {tab==="client" && (
         <>
@@ -13305,7 +13386,9 @@ export default function App() {
         <div style={{background:"#1a2540",border:"1px solid #3d5270",borderRadius:16,padding:"40px 48px",width:"100%",maxWidth:400,boxShadow:"0 20px 60px rgba(0,0,0,0.4)"}}>
           {/* Logo AADS */}
           <div style={{textAlign:"center",marginBottom:32}}>
-            <img src={BANNER_IMG} alt="AADS" style={{height:80,width:"auto",objectFit:"contain",marginBottom:12}}/>
+            {BANNER_IMG
+              ? <img src={BANNER_IMG} alt="AADS" style={{height:80,width:"auto",objectFit:"contain",marginBottom:12}}/>
+              : <div style={{fontSize:20,fontWeight:800,color:"#f1f5f9",marginBottom:12,letterSpacing:1}}>AADS</div>}
             <div style={{fontSize:13,color:"#7a90aa",fontWeight:600}}>Portail Client Sanitation</div>
             <div style={{fontSize:20,fontWeight:800,color:"#f1f5f9",marginTop:4}}>{CLIENT_CONFIG.nom}</div>
           </div>
