@@ -12223,14 +12223,17 @@ function PlanImplantation({ seuilsGlobaux }) {
                   <div style={{display:"flex",gap:6,marginTop:10}}>
                     <button onClick={async ()=>{
                       if(selectedPostesToAdd.length===0){setShowAddPosteMenu(false);return;}
-                      const cols = Math.ceil(Math.sqrt(selectedPostesToAdd.length));
                       const newPts = [...getPts(activePlan)];
                       const failed = [];
+                      // Empiles en colonne serree en haut a gauche : chacun decale vers
+                      // le bas pour rester attrapable. Au-dela de la hauteur du plan on
+                      // repart sur une colonne a droite. A l utilisateur de les distribuer.
+                      const pasY = 3.2, parCol = 28;
                       for (let i=0; i<selectedPostesToAdd.length; i++) {
                         const id = selectedPostesToAdd[i];
-                        const col = i%cols, row = Math.floor(i/cols);
-                        const x = parseFloat((5 + col*(90/cols)).toFixed(2));
-                        const y = parseFloat((5 + row*(90/Math.ceil(selectedPostesToAdd.length/cols))).toFixed(2));
+                        const colonne = Math.floor(i/parCol), rang = i%parCol;
+                        const x = parseFloat((4 + colonne*5).toFixed(2));
+                        const y = parseFloat((4 + rang*pasY).toFixed(2));
                         newPts.push({id, x, y});
                         try { await savePostePosition(activePlan, id, x, y); }
                         catch(e) { failed.push({id, message: e.message||String(e)}); }
