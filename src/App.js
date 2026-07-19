@@ -11834,7 +11834,7 @@ function PlanImplantation({ seuilsGlobaux }) {
       if (modeColor==="etat") {
         legends = [["#22c55e","Sans activité"],["#f59e0b","Partielle"],["#ef4444","Totale / Capture"]];
       } else if (modeColor==="type") {
-        legends = [[nuisibleColors["__RE"]||"#1e40af","Rongeurs ext. (RE)"],[nuisibleColors["__RI"]||"#60a5fa","Rongeurs int. (RI)"], ...NUISIBLES_LIST.filter(n=>n!=="Rongeurs").map(n=>[nuisibleColors[n]||"#7a90aa",n])];
+        legends = [[nuisibleColors["__RE"]||"#1e40af","Rongeurs ext. (RE)",posteFormes["RE"]||"rond"],[nuisibleColors["__RI"]||"#60a5fa","Rongeurs int. (RI)",posteFormes["RI"]||"rond"], ...NUISIBLES_LIST.filter(n=>n!=="Rongeurs").map(n=>[nuisibleColors[n]||"#7a90aa",n,posteFormes[n]||"rond"])];
       } else if (modeColor==="zone") {
         const zoneColors = {"Exterieur":"#3b82f6","Locaux techniques":"#f59e0b","Combles":"#8b5cf6","Emballages":"#22c55e","Conditionnement":"#ef4444","Bureaux":"#06b6d4","Maintenance":"#84cc16","Stockage":"#f97316","Autres":"#7a90aa"};
         legends = Object.entries(zoneColors);
@@ -11860,11 +11860,9 @@ function PlanImplantation({ seuilsGlobaux }) {
 
       // Légende en bas du SVG
       let lx2 = 10; const legendY2 = 585;
-      legends.forEach(([c,l])=>{
+      legends.forEach(([c,l,forme])=>{
         const ns2="http://www.w3.org/2000/svg";
-        const circ=document.createElementNS(ns2,"circle");
-        circ.setAttribute("cx",lx2+6);circ.setAttribute("cy",legendY2);circ.setAttribute("r","6");
-        circ.setAttribute("fill",c);svgClone.appendChild(circ);
+        svgClone.appendChild(svgPastilleForme(forme||"rond",lx2+6,legendY2,6,c,ns2));
         const txt=document.createElementNS(ns2,"text");
         txt.setAttribute("x",lx2+16);txt.setAttribute("y",legendY2+4);
         txt.setAttribute("font-size","9");txt.setAttribute("fill","#374151");
@@ -11925,18 +11923,15 @@ function PlanImplantation({ seuilsGlobaux }) {
       if (modeColor==="etat") {
         legendsC = [["#22c55e","Sans activité"],["#f59e0b","Partielle"],["#ef4444","Totale / Capture"]];
       } else if (modeColor==="type") {
-        legendsC = [[nuisibleColors["__RE"]||"#1e40af","Rongeurs ext."],[nuisibleColors["__RI"]||"#60a5fa","Rongeurs int."], ...NUISIBLES_LIST.filter(n=>n!=="Rongeurs").map(n=>[nuisibleColors[n]||"#7a90aa",n])];
+        legendsC = [[nuisibleColors["__RE"]||"#1e40af","Rongeurs ext.",posteFormes["RE"]||"rond"],[nuisibleColors["__RI"]||"#60a5fa","Rongeurs int.",posteFormes["RI"]||"rond"], ...NUISIBLES_LIST.filter(n=>n!=="Rongeurs").map(n=>[nuisibleColors[n]||"#7a90aa",n,posteFormes[n]||"rond"])];
       } else if (modeColor==="zone") {
         const zoneColors = {"Exterieur":"#3b82f6","Locaux techniques":"#f59e0b","Combles":"#8b5cf6","Emballages":"#22c55e","Conditionnement":"#ef4444","Bureaux":"#06b6d4","Maintenance":"#84cc16","Stockage":"#f97316","Autres":"#7a90aa"};
         legendsC = Object.entries(zoneColors);
       }
       let lx = 10;
       ctx.font = "bold 9px sans-serif";
-      legendsC.forEach(([c,l]) => {
-        ctx.beginPath();
-        ctx.arc(lx+6, legendY+8, 6, 0, Math.PI*2);
-        ctx.fillStyle = c;
-        ctx.fill();
+      legendsC.forEach(([c,l,forme]) => {
+        canvasPastilleForme(ctx, forme||"rond", lx+6, legendY+8, 6, c);
         ctx.fillStyle = "#000";
         ctx.textAlign = "left";
         ctx.fillText(l, lx+16, legendY+8);
