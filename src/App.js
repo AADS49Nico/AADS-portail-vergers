@@ -11852,7 +11852,7 @@ function PlanImplantation({ seuilsGlobaux }) {
       if (TOQUE_LOGO) {
         const logoEl = document.createElementNS("http://www.w3.org/2000/svg","image");
         logoEl.setAttribute("href", TOQUE_LOGO);
-        logoEl.setAttribute("x", W-90); logoEl.setAttribute("y", 4);
+        logoEl.setAttribute("x", 810); logoEl.setAttribute("y", 4); // 900 (largeur plan) - 90
         logoEl.setAttribute("width", "80"); logoEl.setAttribute("height", "40");
         logoEl.setAttribute("preserveAspectRatio", "xMidYMid meet");
         svgClone.insertBefore(logoEl, svgClone.firstChild);
