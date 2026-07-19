@@ -177,7 +177,7 @@ const TABLES_PAR_SITE = ["postes","passages","plans","plans_dessines","plan_acti
   "desinsectisation","maintenance_cleaning","maintenance_deiv_appareils",
   "maintenance_deiv_interventions","reinterventions","traitement_thermique","seuils"];
 
-let SITE_ACTIF = "";
+let SITE_ACTIF = ""; // reassigne par changerSite
 try { SITE_ACTIF = window.localStorage.getItem("aads_site_actif") || ""; } catch(_e) { SITE_ACTIF = ""; }
 let SITES_DISPO = [];
 
@@ -188,9 +188,17 @@ function filtreSite(table) {
   if (!tableParSite(table)) return "";
   return "&site=eq." + encodeURIComponent(SITE_ACTIF || "__non_defini__");
 }
+// Bascule de site sans rechargement complet : le reload etait intercepte par le
+// service worker de la PWA (ancien bundle reservi), et les pages ne se
+// mettaient a jour qu au remontage suivant, c.-a-d. au changement d onglet.
+// On met a jour la globale + le localStorage, puis on notifie le shell qui
+// remonte la page active via sa key. Le remontage rejoue l effet de chargement.
+var __onSiteChange = null;
 function changerSite(id) {
+  if (id === SITE_ACTIF) return;
   try { window.localStorage.setItem("aads_site_actif", id); } catch(_e) { return; }
-  window.location.reload();
+  SITE_ACTIF = id;
+  if (typeof __onSiteChange === "function") __onSiteChange(id);
 }
 
 async function sbFetch(path, method, body, extraHeaders) {
@@ -13603,6 +13611,13 @@ function AppPortail({ isAdmin, onLogout }) {
   const [showParametres, setShowParametres] = useState(false);
 
   const [, forceConfigUpdate] = useState(0);
+  // Miroir React de SITE_ACTIF : sert de key a View pour la remonter a chaque
+  // bascule, ce qui rejoue le chargement des donnees de la page.
+  const [siteCourant, setSiteCourant] = useState(SITE_ACTIF);
+  useEffect(() => {
+    __onSiteChange = (id) => setSiteCourant(id);
+    return () => { __onSiteChange = null; };
+  }, []);
 
   useEffect(() => {
     sbFetch("config_client?order=id.asc", "GET").then(data => {
@@ -13613,6 +13628,7 @@ function AppPortail({ isAdmin, onLogout }) {
         // sinon les chargements deja partis auraient tourne sans filtre de site.
         if (SITE_ACTIF !== choisi.id) {
           try { window.localStorage.setItem("aads_site_actif", choisi.id); } catch(_e) { return; }
+          SITE_ACTIF = choisi.id;
           window.location.reload();
           return;
         }
@@ -13870,8 +13886,12 @@ function AppPortail({ isAdmin, onLogout }) {
 
         {/* MAIN */}
         <main style={{ flex: 1, padding: "32px 36px", overflowY: "auto", position:"relative" }}>
-          <div style={{ position:"absolute", top:12, right:16, zIndex:10, display:"flex", alignItems:"center", gap:8 }}>
-            {page !== "dashboard" && PAGES_AVEC_SITE.indexOf(page) >= 0 && <SiteSwitcher compact/>}
+          {page !== "dashboard" && PAGES_AVEC_SITE.indexOf(page) >= 0 && (
+            <div style={{ position:"absolute", top:12, left:0, right:0, zIndex:9, display:"flex", justifyContent:"center", pointerEvents:"none" }}>
+              <div style={{ pointerEvents:"auto" }}><SiteSwitcher/></div>
+            </div>
+          )}
+          <div style={{ position:"absolute", top:12, right:16, zIndex:10 }}>
             <button onClick={()=>window.location.reload()} title="Rafraîchir les données"
               style={{ background:"#243352", border:"1px solid #3d5270", borderRadius:7, color:"#7a90aa", fontSize:14, cursor:"pointer", padding:"4px 10px", lineHeight:1, fontWeight:700 }}>
               ↻
@@ -13889,7 +13909,7 @@ function AppPortail({ isAdmin, onLogout }) {
             </div>
             </>
           )}
-          <View onNav={setPage} reinterventions={reinterventions} setReinterventions={setReinterventions} seuilsGlobaux={seuilsGlobaux} setSeuilsGlobaux={setSeuilsGlobaux} passagesGlobaux={passagesGlobaux} setPassagesGlobaux={setPassagesGlobaux} onLogoClick={()=>setShowLogoEditor(v=>!v)} onParamsClick={()=>setShowParametres(true)} isAdmin={isAdmin} />
+          <View key={"page_" + page + "_" + siteCourant} onNav={setPage} reinterventions={reinterventions} setReinterventions={setReinterventions} seuilsGlobaux={seuilsGlobaux} setSeuilsGlobaux={setSeuilsGlobaux} passagesGlobaux={passagesGlobaux} setPassagesGlobaux={setPassagesGlobaux} onLogoClick={()=>setShowLogoEditor(v=>!v)} onParamsClick={()=>setShowParametres(true)} isAdmin={isAdmin} />
         </main>
       </div>
       {showParametres && <ParametresModal onClose={()=>setShowParametres(false)} />}
