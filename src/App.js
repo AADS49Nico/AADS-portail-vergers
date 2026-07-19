@@ -10781,7 +10781,8 @@ function GestionPostes({ postes, setPostes }) {
 // ============================================================
 function PlanEditor({ onClose, onSaved, existingPlan, backgroundImg, sourcePlanId }) {
   const [label, setLabel] = useState(existingPlan?.label || "");
-  const [elements, setElements] = useState(existingPlan?.elements || []);
+  const grilleSauvee = (existingPlan?.elements || []).filter(e => e.type === "__grille")[0] || null;
+  const [elements, setElements] = useState((existingPlan?.elements || []).filter(e => e.type !== "__grille"));
   const [tool, setTool] = useState("trait"); // trait, rect, texte, select
   const [drawing, setDrawing] = useState(null);
   const [selectedEl, setSelectedEl] = useState(null);
@@ -10790,15 +10791,42 @@ function PlanEditor({ onClose, onSaved, existingPlan, backgroundImg, sourcePlanI
   const [textInput, setTextInput] = useState("");
   const [pendingTextPos, setPendingTextPos] = useState(null);
   const [polyPoints, setPolyPoints] = useState(null); // pour outil polygone
+  // Grille : nombre de cases reglable, aimantation et reperage A1/B2 optionnels.
+  // Persistee avec le plan pour que les reperes restent stables entre deux ouvertures.
+  const [gridCols, setGridCols] = useState((grilleSauvee && grilleSauvee.gridCols) || existingPlan?.gridCols || 6);
+  const [gridRows, setGridRows] = useState((grilleSauvee && grilleSauvee.gridRows) || existingPlan?.gridRows || 4);
+  const [gridOn, setGridOn]     = useState(grilleSauvee ? grilleSauvee.gridOn : (existingPlan?.gridOn !== undefined ? existingPlan.gridOn : true));
+  const [snapOn, setSnapOn]     = useState(grilleSauvee ? grilleSauvee.snapOn : (existingPlan?.snapOn !== undefined ? existingPlan.snapOn : true));
   const svgRef = React.useRef(null);
 
   const W = 900, H = 600;
+  const cellW = W / gridCols, cellH = H / gridRows;
+
+  // Lettre(s) de colonne facon tableur : A..Z puis AA, AB...
+  function colonneLabel(i) {
+    var s = "", n = i;
+    do { s = String.fromCharCode(65 + (n % 26)) + s; n = Math.floor(n / 26) - 1; } while (n >= 0);
+    return s;
+  }
+  // Aimante une coordonnee au centre de la case la plus proche.
+  function snap(x, y) {
+    if (!snapOn || !gridOn) return { x: Math.round(x), y: Math.round(y) };
+    var col = Math.min(gridCols - 1, Math.max(0, Math.floor(x / cellW)));
+    var row = Math.min(gridRows - 1, Math.max(0, Math.floor(y / cellH)));
+    return { x: Math.round((col + 0.5) * cellW), y: Math.round((row + 0.5) * cellH) };
+  }
+  // Reference de case A1/B2 pour une coordonnee.
+  function repereCase(x, y) {
+    var col = Math.min(gridCols - 1, Math.max(0, Math.floor(x / cellW)));
+    var row = Math.min(gridRows - 1, Math.max(0, Math.floor(y / cellH)));
+    return colonneLabel(col) + (row + 1);
+  }
 
   function getSvgCoords(e) {
     const rect = svgRef.current.getBoundingClientRect();
     const x = ((e.clientX - rect.left) / rect.width) * W;
     const y = ((e.clientY - rect.top) / rect.height) * H;
-    return { x: Math.round(x), y: Math.round(y) };
+    return snap(x, y);
   }
 
   function handleMouseDown(e) {
@@ -10807,6 +10835,7 @@ function PlanEditor({ onClose, onSaved, existingPlan, backgroundImg, sourcePlanI
     const { x, y } = getSvgCoords(e);
     if (tool === "texte") {
       setPendingTextPos({ x, y });
+      if (gridOn && !textInput.trim()) setTextInput(repereCase(x, y));
       return;
     }
     if (tool === "polygone") {
@@ -10864,9 +10893,13 @@ function PlanEditor({ onClose, onSaved, existingPlan, backgroundImg, sourcePlanI
   async function savePlan() {
     if (!label.trim()) { alert("Donnez un nom au plan"); return; }
     const id = existingPlan?.id || String(Date.now());
-    const planData = { id, contrat: CLIENT_CONFIG.contrat, label: label.trim(), elements: JSON.stringify(elements), background_img: backgroundImg || existingPlan?.backgroundImg || "" };
+    // La grille voyage dans le JSON elements sous une entree meta (type "__grille"),
+    // ce qui evite d ajouter des colonnes a plans_dessines. Le rendu ignore ce type.
+    const grilleMeta = { id: "__grille", type: "__grille", gridCols, gridRows, gridOn, snapOn };
+    const elementsAvecMeta = elements.filter(e => e.type !== "__grille").concat([grilleMeta]);
+    const planData = { id, contrat: CLIENT_CONFIG.contrat, label: label.trim(), elements: JSON.stringify(elementsAvecMeta), background_img: backgroundImg || existingPlan?.backgroundImg || "" };
     await sbUpsert("plans_dessines", planData);
-    if (onSaved) onSaved({ id, label: label.trim(), elements, backgroundImg: backgroundImg || existingPlan?.backgroundImg });
+    if (onSaved) onSaved({ id, label: label.trim(), elements: elementsAvecMeta, backgroundImg: backgroundImg || existingPlan?.backgroundImg, gridCols, gridRows, gridOn, snapOn });
     if (onClose) onClose();
   }
 
@@ -10904,6 +10937,22 @@ function PlanEditor({ onClose, onSaved, existingPlan, backgroundImg, sourcePlanI
             <span style={{ fontSize:11, color:"#7a90aa" }}>Epaisseur</span>
             <input type="range" min="1" max="8" value={strokeWidth} onChange={e=>setStrokeWidth(parseInt(e.target.value))} style={{ width:60 }}/>
           </div>
+          <div style={{ display:"flex", alignItems:"center", gap:8, marginLeft:8, paddingLeft:12, borderLeft:"1px solid #3d5270" }}>
+            <button onClick={()=>setGridOn(v=>!v)} title="Afficher la grille et les reperes de case"
+              style={{ background:gridOn?"#1d4ed8":"#243352", color:gridOn?"#fff":"#94a3b8", border:"1px solid "+(gridOn?"#3b82f6":"#3d5270"), borderRadius:7, padding:"6px 12px", fontSize:11, fontWeight:600, cursor:"pointer", fontFamily:"inherit" }}>
+              Grille
+            </button>
+            <button onClick={()=>setSnapOn(v=>!v)} disabled={!gridOn} title="Aimanter les elements au centre des cases"
+              style={{ background:snapOn&&gridOn?"#1d4ed8":"#243352", color:snapOn&&gridOn?"#fff":"#94a3b8", border:"1px solid "+(snapOn&&gridOn?"#3b82f6":"#3d5270"), borderRadius:7, padding:"6px 12px", fontSize:11, fontWeight:600, cursor:gridOn?"pointer":"default", opacity:gridOn?1:0.5, fontFamily:"inherit" }}>
+              Aimant
+            </button>
+            <span style={{ fontSize:11, color:"#7a90aa" }}>Cols</span>
+            <input type="number" min="1" max="26" value={gridCols} onChange={e=>setGridCols(Math.min(26,Math.max(1,parseInt(e.target.value)||1)))}
+              style={{ width:44, background:"#243352", border:"1px solid #3d5270", borderRadius:6, padding:"4px 6px", color:"#f1f5f9", fontSize:11, fontFamily:"inherit" }}/>
+            <span style={{ fontSize:11, color:"#7a90aa" }}>Lignes</span>
+            <input type="number" min="1" max="40" value={gridRows} onChange={e=>setGridRows(Math.min(40,Math.max(1,parseInt(e.target.value)||1)))}
+              style={{ width:44, background:"#243352", border:"1px solid #3d5270", borderRadius:6, padding:"4px 6px", color:"#f1f5f9", fontSize:11, fontFamily:"inherit" }}/>
+          </div>
           <button onClick={undoLast} disabled={elements.length===0}
             style={{ background:"#f59e0b22", color:"#f59e0b", border:"1px solid #f59e0b44", borderRadius:7, padding:"6px 12px", fontSize:12, fontWeight:700, cursor:elements.length?"pointer":"default", fontFamily:"inherit", opacity:elements.length?1:0.4, marginLeft:"auto" }}>
             ↩ Annuler dernier
@@ -10919,14 +10968,25 @@ function PlanEditor({ onClose, onSaved, existingPlan, backgroundImg, sourcePlanI
           <svg ref={svgRef} viewBox={"0 0 "+W+" "+H} style={{ width:"100%", height:"auto", display:"block", cursor: tool==="select"?"default":"crosshair" }}
             onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} onMouseLeave={()=>setDrawing(null)}
             onDoubleClick={()=>{ if(tool==="polygone") finishPolygon(); }}>
-            {/* Grille de fond */}
-            <defs>
-              <pattern id="grid" width="20" height="20" patternUnits="userSpaceOnUse">
-                <path d="M 20 0 L 0 0 0 20" fill="none" stroke="#f1f5f9" strokeWidth="1"/>
-              </pattern>
-            </defs>
-            <rect width={W} height={H} fill="url(#grid)"/>
+            <rect width={W} height={H} fill="#fff"/>
             {backgroundImg && <image href={backgroundImg} x="0" y="0" width={W} height={H} preserveAspectRatio="xMidYMid meet" opacity="0.85"/>}
+            {/* Grille reglable, tracee au-dessus du plan pour rester lisible */}
+            {gridOn && (
+              <g pointerEvents="none">
+                {Array.from({length: gridCols - 1}).map((_, i) => (
+                  <line key={"vc"+i} x1={(i+1)*cellW} y1={0} x2={(i+1)*cellW} y2={H} stroke="#93c5fd" strokeWidth="0.8" strokeDasharray="4 4"/>
+                ))}
+                {Array.from({length: gridRows - 1}).map((_, i) => (
+                  <line key={"hr"+i} x1={0} y1={(i+1)*cellH} x2={W} y2={(i+1)*cellH} stroke="#93c5fd" strokeWidth="0.8" strokeDasharray="4 4"/>
+                ))}
+                {Array.from({length: gridCols}).map((_, c) => (
+                  <text key={"cl"+c} x={(c+0.5)*cellW} y={13} textAnchor="middle" fontSize="11" fontWeight="700" fill="#2563eb">{colonneLabel(c)}</text>
+                ))}
+                {Array.from({length: gridRows}).map((_, r) => (
+                  <text key={"rl"+r} x={9} y={(r+0.5)*cellH+4} textAnchor="middle" fontSize="11" fontWeight="700" fill="#2563eb">{r+1}</text>
+                ))}
+              </g>
+            )}
 
             {/* Elements existants */}
             {elements.map(el => {
@@ -12110,7 +12170,7 @@ function PlanImplantation({ seuilsGlobaux }) {
                       : plan.dessine
                       ? <svg viewBox="0 0 900 600" style={{width:"100%",display:"block",background:"#fff"}}>
                           {plan.backgroundImg && <image href={plan.backgroundImg} x="0" y="0" width="900" height="600" preserveAspectRatio="xMidYMid meet"/>}
-                          {(plan.elements||[]).map(el=>{
+                          {(plan.elements||[]).filter(el=>el.type!=="__grille").map(el=>{
                             if (el.type==="trait") return <line key={el.id} x1={el.x1} y1={el.y1} x2={el.x2} y2={el.y2} stroke={el.color} strokeWidth={el.strokeWidth} strokeLinecap="round"/>;
                             if (el.type==="rect") { const x=Math.min(el.x1,el.x2),y=Math.min(el.y1,el.y2),w=Math.abs(el.x2-el.x1),h=Math.abs(el.y2-el.y1); return <rect key={el.id} x={x} y={y} width={w} height={h} fill="none" stroke={el.color} strokeWidth={el.strokeWidth}/>; }
                             if (el.type==="cercle") { const cx=(el.x1+el.x2)/2,cy=(el.y1+el.y2)/2,rx=Math.abs(el.x2-el.x1)/2,ry=Math.abs(el.y2-el.y1)/2; return <ellipse key={el.id} cx={cx} cy={cy} rx={rx} ry={ry} fill="none" stroke={el.color} strokeWidth={el.strokeWidth}/>; }
@@ -12153,7 +12213,7 @@ function PlanImplantation({ seuilsGlobaux }) {
               : activePlanData&&activePlanData.dessine
               ? <svg viewBox="0 0 900 600" style={{width:"100%",display:"block",background:"#fff"}}>
                   {activePlanData.backgroundImg && <image href={activePlanData.backgroundImg} x="0" y="0" width="900" height="600" preserveAspectRatio="xMidYMid meet"/>}
-                  {(activePlanData.elements||[]).map(el=>{
+                  {(activePlanData.elements||[]).filter(el=>el.type!=="__grille").map(el=>{
                     if (el.type==="trait") return <line key={el.id} x1={el.x1} y1={el.y1} x2={el.x2} y2={el.y2} stroke={el.color} strokeWidth={el.strokeWidth} strokeLinecap="round"/>;
                     if (el.type==="rect") { const x=Math.min(el.x1,el.x2),y=Math.min(el.y1,el.y2),w=Math.abs(el.x2-el.x1),h=Math.abs(el.y2-el.y1); return <rect key={el.id} x={x} y={y} width={w} height={h} fill="none" stroke={el.color} strokeWidth={el.strokeWidth}/>; }
                     if (el.type==="cercle") { const cx=(el.x1+el.x2)/2,cy=(el.y1+el.y2)/2,rx=Math.abs(el.x2-el.x1)/2,ry=Math.abs(el.y2-el.y1)/2; return <ellipse key={el.id} cx={cx} cy={cy} rx={rx} ry={ry} fill="none" stroke={el.color} strokeWidth={el.strokeWidth}/>; }
