@@ -333,6 +333,15 @@ function categorieForme(poste) {
 
 // Cree l element SVG d une pastille dans la forme voulue, pour les exports.
 // Centre en (x,y), rayon r, remplissage col. Retourne un <g> a appendre au SVG.
+// Petite puce SVG (10px) dans la forme voulue, pour legendes et filtres.
+function PuceForme({ forme, col, taille }) {
+  var t = taille || 10;
+  if (forme === "triangle") return <svg width={t} height={t} viewBox="0 0 10 10" style={{display:"inline-block",verticalAlign:"middle"}}><polygon points="5,1 9,9 1,9" fill={col}/></svg>;
+  if (forme === "carre") return <span style={{display:"inline-block",width:t,height:t,background:col,borderRadius:2}}/>;
+  if (forme === "ovale") return <span style={{display:"inline-block",width:t*1.35,height:t*0.75,background:col,borderRadius:"50%"}}/>;
+  return <span style={{display:"inline-block",width:t,height:t,background:col,borderRadius:"50%"}}/>;
+}
+
 function svgPastilleForme(forme, x, y, r, col, ns) {
   var g = document.createElementNS(ns, "g");
   var shape;
@@ -12086,10 +12095,11 @@ function PlanImplantation({ seuilsGlobaux }) {
             const count = postes.filter(p=>p.id&&/^RE/i.test(p.id)).length;
             if(count===0) return null;
             const active = filterNuisibleArr.includes("__RE");
+            const colRE = nuisibleColors["__RE"]||"#1e40af";
             return (
               <button key="__RE" onClick={()=>setFilterNuisibleArr(prev=>active?prev.filter(x=>x!=="__RE"):[...prev,"__RE"])}
-                style={{display:"flex",alignItems:"center",gap:6,background:active?"#1e40af22":"transparent",color:active?"#1e40af":"#7a90aa",border:"1px solid "+(active?"#1e40af":"#3d5270"),borderRadius:20,padding:"5px 14px",fontSize:12,fontWeight:active?700:500,cursor:"pointer",fontFamily:"inherit"}}>
-                <span style={{width:8,height:8,borderRadius:"50%",background:"#1e40af",display:"inline-block"}}/>
+                style={{display:"flex",alignItems:"center",gap:6,background:active?colRE+"22":"transparent",color:active?colRE:"#7a90aa",border:"1px solid "+(active?colRE:"#3d5270"),borderRadius:20,padding:"5px 14px",fontSize:12,fontWeight:active?700:500,cursor:"pointer",fontFamily:"inherit"}}>
+                <PuceForme forme={posteFormes["RE"]||"rond"} col={colRE} taille={9}/>
                 Rongeurs ext. ({count})
               </button>
             );
@@ -12099,10 +12109,11 @@ function PlanImplantation({ seuilsGlobaux }) {
             const count = postes.filter(p=>p.id&&/^(RI|R\d|S\d)/i.test(p.id)&&!/^RE/i.test(p.id)).length;
             if(count===0) return null;
             const active = filterNuisibleArr.includes("__RI");
+            const colRI = nuisibleColors["__RI"]||"#60a5fa";
             return (
               <button key="__RI" onClick={()=>setFilterNuisibleArr(prev=>active?prev.filter(x=>x!=="__RI"):[...prev,"__RI"])}
-                style={{display:"flex",alignItems:"center",gap:6,background:active?"#60a5fa22":"transparent",color:active?"#60a5fa":"#7a90aa",border:"1px solid "+(active?"#60a5fa":"#3d5270"),borderRadius:20,padding:"5px 14px",fontSize:12,fontWeight:active?700:500,cursor:"pointer",fontFamily:"inherit"}}>
-                <span style={{width:8,height:8,borderRadius:"50%",background:"#60a5fa",display:"inline-block"}}/>
+                style={{display:"flex",alignItems:"center",gap:6,background:active?colRI+"22":"transparent",color:active?colRI:"#7a90aa",border:"1px solid "+(active?colRI:"#3d5270"),borderRadius:20,padding:"5px 14px",fontSize:12,fontWeight:active?700:500,cursor:"pointer",fontFamily:"inherit"}}>
+                <PuceForme forme={posteFormes["RI"]||"rond"} col={colRI} taille={9}/>
                 Rongeurs int. ({count})
               </button>
             );
@@ -12114,7 +12125,7 @@ function PlanImplantation({ seuilsGlobaux }) {
             return (
               <button key={n} onClick={()=>setFilterNuisibleArr(prev=>active?prev.filter(x=>x!==n):[...prev,n])}
                 style={{display:"flex",alignItems:"center",gap:6,background:active?"#fff":"transparent",color:active?"#1a2540":"#7a90aa",border:"1px solid "+(active?"#fff":"#3d5270"),borderRadius:20,padding:"5px 14px",fontSize:12,fontWeight:active?700:500,cursor:"pointer",fontFamily:"inherit"}}>
-                <span style={{width:8,height:8,borderRadius:"50%",background:col,display:"inline-block"}}/>
+                <PuceForme forme={posteFormes[n==="Rongeurs"?"RI":n]||"rond"} col={col} taille={9}/>
                 {n+" ("+count+")"}
               </button>
             );
@@ -12578,12 +12589,13 @@ function PlanImplantation({ seuilsGlobaux }) {
         )}
         {modeColor==="type"&&(
           <div style={{display:"flex",flexWrap:"wrap",gap:10}}>
-            <div style={{display:"flex",alignItems:"center",gap:5}}><span style={{width:10,height:10,borderRadius:"50%",background:nuisibleColors["__RE"]||"#1e40af",display:"inline-block"}}/><span style={{fontSize:11,color:"#7a90aa"}}>Rongeurs ext. (RE)</span></div>
-            <div style={{display:"flex",alignItems:"center",gap:5}}><span style={{width:10,height:10,borderRadius:"50%",background:nuisibleColors["__RI"]||"#60a5fa",display:"inline-block"}}/><span style={{fontSize:11,color:"#7a90aa"}}>Rongeurs int. (RI)</span></div>
+            <div style={{display:"flex",alignItems:"center",gap:5}}><PuceForme forme={posteFormes["RE"]||"rond"} col={nuisibleColors["__RE"]||"#1e40af"}/><span style={{fontSize:11,color:"#7a90aa"}}>Rongeurs ext. (RE)</span></div>
+            <div style={{display:"flex",alignItems:"center",gap:5}}><PuceForme forme={posteFormes["RI"]||"rond"} col={nuisibleColors["__RI"]||"#60a5fa"}/><span style={{fontSize:11,color:"#7a90aa"}}>Rongeurs int. (RI)</span></div>
             {NUISIBLES_LIST.filter(n=>n!=="Rongeurs").map(n=>{
               const col=nuisibleColors[n]||"#7a90aa";
               const count=postes.filter(p=>(p.nuisible||"Rongeurs")===n).length;
-              return(<div key={n} style={{display:"flex",alignItems:"center",gap:5}}><span style={{width:10,height:10,borderRadius:"50%",background:col,display:"inline-block"}}/><span style={{fontSize:11,color:"#7a90aa"}}>{n} ({count})</span></div>);
+              const formeN = posteFormes[n==="Rongeurs"?"RI":n]||"rond";
+              return(<div key={n} style={{display:"flex",alignItems:"center",gap:5}}><PuceForme forme={formeN} col={col}/><span style={{fontSize:11,color:"#7a90aa"}}>{n} ({count})</span></div>);
             })}
           </div>
         )}
