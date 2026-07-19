@@ -315,6 +315,65 @@ const SEUILS = { alerte: 5, critique: 10 };
 const DATES = []; // Chargé dynamiquement depuis Supabase (passages)
 const MACROS = ["Extérieur","Locaux techniques","Combles / Faux-plafonds","Emballages","Conditionnement","Bureaux / R&D","Maintenance","Stockage","Autres"];
 const NUISIBLES_LIST = ["Rongeurs", "Blattes", "Insectes volants", "Teignes", "IPS"];
+
+// Forme de pastille par categorie de poste. La couleur reste pilotee par le mode
+// (Etat/Type/Zone) : forme et couleur sont deux axes independants.
+// Categories : RE, RI (rongeurs ext/int), puis un nuisible non-rongeur par nom.
+const FORMES_DISPO = ["rond", "carre", "ovale", "triangle"];
+const POSTE_FORMES_DEFAUT = {
+  RE: "rond", RI: "rond",
+  "Blattes": "carre", "Insectes volants": "triangle", "Teignes": "ovale", "IPS": "carre",
+};
+// Categorie de forme d un poste : RE / RI pour les rongeurs, sinon le nom du nuisible.
+function categorieForme(poste) {
+  var nuisible = (poste && poste.nuisible) || "Rongeurs";
+  if (nuisible === "Rongeurs") return poste && poste.type === "RE" ? "RE" : "RI";
+  return nuisible;
+}
+
+// Cree l element SVG d une pastille dans la forme voulue, pour les exports.
+// Centre en (x,y), rayon r, remplissage col. Retourne un <g> a appendre au SVG.
+function svgPastilleForme(forme, x, y, r, col, ns) {
+  var g = document.createElementNS(ns, "g");
+  var shape;
+  if (forme === "triangle") {
+    var h = r * 1.7;
+    shape = document.createElementNS(ns, "polygon");
+    shape.setAttribute("points", x+","+(y-h*0.55)+" "+(x+r*1.15)+","+(y+h*0.45)+" "+(x-r*1.15)+","+(y+h*0.45));
+  } else if (forme === "carre") {
+    shape = document.createElementNS(ns, "rect");
+    shape.setAttribute("x", x-r); shape.setAttribute("y", y-r);
+    shape.setAttribute("width", r*2); shape.setAttribute("height", r*2); shape.setAttribute("rx", 2);
+  } else if (forme === "ovale") {
+    shape = document.createElementNS(ns, "ellipse");
+    shape.setAttribute("cx", x); shape.setAttribute("cy", y);
+    shape.setAttribute("rx", r*1.3); shape.setAttribute("ry", r*0.78);
+  } else {
+    shape = document.createElementNS(ns, "circle");
+    shape.setAttribute("cx", x); shape.setAttribute("cy", y); shape.setAttribute("r", r);
+  }
+  shape.setAttribute("fill", col); shape.setAttribute("stroke", "#fff");
+  shape.setAttribute("stroke-width", 2); shape.setAttribute("stroke-linejoin", "round");
+  g.appendChild(shape);
+  return g;
+}
+
+// Trace une pastille de forme donnee sur un canvas 2D (exports rasterises).
+function canvasPastilleForme(ctx, forme, x, y, r, col) {
+  ctx.beginPath();
+  if (forme === "triangle") {
+    var h = r * 1.7;
+    ctx.moveTo(x, y - h*0.55); ctx.lineTo(x + r*1.15, y + h*0.45); ctx.lineTo(x - r*1.15, y + h*0.45); ctx.closePath();
+  } else if (forme === "carre") {
+    ctx.rect(x - r, y - r, r*2, r*2);
+  } else if (forme === "ovale") {
+    ctx.ellipse(x, y, r*1.3, r*0.78, 0, 0, Math.PI*2);
+  } else {
+    ctx.arc(x, y, r, 0, Math.PI*2);
+  }
+  ctx.fillStyle = col; ctx.fill();
+  ctx.strokeStyle = "#fff"; ctx.lineWidth = 2; ctx.lineJoin = "round"; ctx.stroke();
+}
 const NUISIBLE_COLORS = {
   Rongeurs: "#3b82f6",
   Blattes: "#ef4444",
@@ -11235,6 +11294,15 @@ function PlanEditor({ onClose, onSaved, existingPlan, backgroundImg, sourcePlanI
               <button onClick={()=>setTxtBold(v=>!v)} style={{ background:txtBold?"#1d4ed8":"#1a2540", color:txtBold?"#fff":"#94a3b8", border:"1px solid "+(txtBold?"#3b82f6":"#3d5270"), borderRadius:5, padding:"4px 9px", fontSize:12, fontWeight:800, cursor:"pointer", fontFamily:"inherit" }}>B</button>
               <button onClick={()=>setTxtItalic(v=>!v)} style={{ background:txtItalic?"#1d4ed8":"#1a2540", color:txtItalic?"#fff":"#94a3b8", border:"1px solid "+(txtItalic?"#3b82f6":"#3d5270"), borderRadius:5, padding:"4px 9px", fontSize:12, fontStyle:"italic", fontWeight:700, cursor:"pointer", fontFamily:"inherit" }}>I</button>
               <button onClick={()=>setTxtHighlight(v=>!v)} style={{ background:txtHighlight?"#facc15":"#1a2540", color:txtHighlight?"#1a2540":"#94a3b8", border:"1px solid "+(txtHighlight?"#facc15":"#3d5270"), borderRadius:5, padding:"4px 9px", fontSize:12, fontWeight:700, cursor:"pointer", fontFamily:"inherit" }}>S</button>
+              <div style={{ display:"flex", gap:3, paddingLeft:6, marginLeft:2, borderLeft:"1px solid #3d5270" }}>
+                {COLORS.map(c=>{
+                  var courant = elements.filter(x=>x.id===editingText)[0];
+                  var actif = courant && courant.color === c;
+                  return <button key={c} title="Couleur du texte"
+                    onClick={()=>setElements(prev=>prev.map(el=>el.id===editingText?{...el,color:c}:el))}
+                    style={{ width:20, height:20, borderRadius:"50%", background:c, border:actif?"3px solid #fff":"1px solid #3d5270", cursor:"pointer", padding:0 }}/>;
+                })}
+              </div>
               <button onClick={addText} style={{ background:"#22c55e", color:"#fff", border:"none", borderRadius:5, padding:"4px 10px", fontSize:11, fontWeight:700, cursor:"pointer" }}>OK</button>
               <button onClick={()=>{setEditingText(null);setTextInput("");}} style={{ background:"transparent", color:"#7a90aa", border:"1px solid #3d5270", borderRadius:5, padding:"4px 8px", fontSize:11, cursor:"pointer" }}>Annuler</button>
             </div>
@@ -11341,11 +11409,43 @@ function PlanImplantation({ seuilsGlobaux }) {
     try { const s = localStorage.getItem("aads_nuisible_colors"); return s ? {...NUISIBLE_COLORS,...JSON.parse(s)} : {...NUISIBLE_COLORS}; } catch(e) { return {...NUISIBLE_COLORS}; }
   });
   const [editingNuisibleColor, setEditingNuisibleColor] = useState(null);
+  const [posteFormes, setPosteFormes] = useState(()=>{
+    try { const s = localStorage.getItem("aads_poste_formes"); return s ? {...POSTE_FORMES_DEFAUT,...JSON.parse(s)} : {...POSTE_FORMES_DEFAUT}; } catch(e) { return {...POSTE_FORMES_DEFAUT}; }
+  });
+  const [showFormesEditor, setShowFormesEditor] = useState(false);
 
   function setNuisibleColor(nuisible, color) {
     const next = {...nuisibleColors, [nuisible]: color};
     setNuisibleColors(next);
     try { localStorage.setItem("aads_nuisible_colors", JSON.stringify(next)); } catch(_e) { return; }
+  }
+  function setPosteForme(categorie, forme) {
+    const next = {...posteFormes, [categorie]: forme};
+    setPosteFormes(next);
+    try { localStorage.setItem("aads_poste_formes", JSON.stringify(next)); } catch(_e) { return; }
+  }
+  // Rend une pastille de poste dans la forme voulue, couleur pilotee par le mode.
+  // Le label est centre par-dessus. isHov agrandit legerement au survol.
+  function renderPastille(forme, taille, col, labelNode, isHov) {
+    var scale = isHov ? "scale(1.2)" : "scale(1)";
+    var ombre = "0 2px 8px rgba(0,0,0,0.7)";
+    var labelWrap = { position:"absolute", inset:0, display:"flex", alignItems:"center", justifyContent:"center", pointerEvents:"none" };
+    if (forme === "triangle") {
+      var w = taille * 1.25, h = taille * 1.1;
+      return (
+        <div style={{ position:"relative", width:w, height:h, transform:scale, transition:"transform 0.05s", cursor:"grab", filter:"drop-shadow("+ombre+")" }}>
+          <svg width={w} height={h} viewBox="0 0 100 90" style={{ display:"block" }}>
+            <polygon points="50,4 96,86 4,86" fill={col} stroke="#fff" strokeWidth="7" strokeLinejoin="round"/>
+          </svg>
+          <div style={{ ...labelWrap, top:"18%" }}>{labelNode}</div>
+        </div>
+      );
+    }
+    var st = { width:taille, height:taille, background:col, border:"2px solid #fff", boxShadow:ombre, display:"flex", alignItems:"center", justifyContent:"center", cursor:"grab", userSelect:"none", boxSizing:"border-box", transform:scale, transition:"transform 0.05s", position:"relative" };
+    if (forme === "carre") st.borderRadius = 3;
+    else if (forme === "ovale") { st.width = taille * 1.35; st.height = taille * 0.8; st.borderRadius = "50%"; }
+    else st.borderRadius = "50%";
+    return <div style={st}>{labelNode}</div>;
   }
 
   useEffect(() => {
@@ -11707,10 +11807,7 @@ function PlanImplantation({ seuilsGlobaux }) {
         const y = (parseFloat(pt.y)/100) * 600;
         const label = posteLabel(p.id);
         const ns = "http://www.w3.org/2000/svg";
-        const circle = document.createElementNS(ns, "circle");
-        circle.setAttribute("cx", x); circle.setAttribute("cy", y); circle.setAttribute("r", 12);
-        circle.setAttribute("fill", col); circle.setAttribute("stroke", "#fff"); circle.setAttribute("stroke-width", 2);
-        svgClone.appendChild(circle);
+        svgClone.appendChild(svgPastilleForme(posteFormes[categorieForme(p)]||"rond", x, y, 12, col, ns));
         const text = document.createElementNS(ns, "text");
         text.setAttribute("x", x); text.setAttribute("y", y+3); text.setAttribute("font-size", posteLabelFontSize(label,8));
         text.setAttribute("fill", "#fff"); text.setAttribute("text-anchor", "middle"); text.setAttribute("font-weight", "900");
@@ -11796,14 +11893,8 @@ function PlanImplantation({ seuilsGlobaux }) {
         const y = (parseFloat(pt.y)/100) * img.height;
         const r = 12;
 
-        // Circle
-        ctx.beginPath();
-        ctx.arc(x, y, r, 0, Math.PI*2);
-        ctx.fillStyle = col;
-        ctx.fill();
-        ctx.strokeStyle = "#fff";
-        ctx.lineWidth = 2;
-        ctx.stroke();
+        // Pastille (forme selon le type de poste)
+        canvasPastilleForme(ctx, posteFormes[categorieForme(p)]||"rond", x, y, r, col);
 
         // Label
         const label = posteLabel(p.id);
@@ -12447,9 +12538,11 @@ function PlanImplantation({ seuilsGlobaux }) {
                   }}
                   onContextMenu={e=>{e.preventDefault();e.stopPropagation();removePosteFromPlan(pt.id);}}
                   onMouseEnter={()=>setHover(pt.id)} onMouseLeave={()=>setHover(null)}>
-                  <div style={{width:22,height:22,borderRadius:"50%",background:col,border:"2px solid #fff",boxShadow:"0 2px 8px rgba(0,0,0,0.7)",display:"flex",alignItems:"center",justifyContent:"center",cursor:"grab",userSelect:"none",transition:"transform 0.05s",transform:isHov?"scale(1.2)":"scale(1)"}}>
-                    <span style={{fontSize:posteLabelFontSize(pt.id,7),fontWeight:900,color:"#fff"}}>{posteLabel(pt.id)}</span>
-                  </div>
+                  {renderPastille(
+                    posteFormes[categorieForme(p)] || "rond", 22, col,
+                    <span style={{fontSize:posteLabelFontSize(pt.id,7),fontWeight:900,color:"#fff",textShadow:"0 1px 2px rgba(0,0,0,0.6)"}}>{posteLabel(pt.id)}</span>,
+                    isHov
+                  )}
                   {isHov&&(
                     <div style={{position:"absolute",left:"50%",top:-38,transform:"translateX(-50%)",background:"#243352",border:"1px solid "+col,borderRadius:7,padding:"4px 10px",fontSize:10,color:"#f1f5f9",whiteSpace:"nowrap",zIndex:20,boxShadow:"0 2px 8px rgba(0,0,0,0.5)"}}>
                       <strong>{pt.id}</strong> — {(p.zone||"").slice(0,25)}
@@ -12489,7 +12582,37 @@ function PlanImplantation({ seuilsGlobaux }) {
             })}
           </div>
         )}
+        <button onClick={()=>setShowFormesEditor(v=>!v)} title="Choisir la forme des pastilles par type de poste"
+          style={{ marginLeft:"auto", background:showFormesEditor?"#1d4ed8":"#243352", color:showFormesEditor?"#fff":"#94a3b8", border:"1px solid "+(showFormesEditor?"#3b82f6":"#3d5270"), borderRadius:7, padding:"5px 12px", fontSize:11, fontWeight:600, cursor:"pointer", fontFamily:"inherit" }}>
+          Formes des pastilles
+        </button>
       </div>
+
+      {showFormesEditor && (
+        <div style={{ marginTop:10, background:"#243352", border:"1px solid #3d5270", borderRadius:10, padding:14 }}>
+          <div style={{ fontSize:12, color:"#94a3b8", fontWeight:700, marginBottom:10 }}>Forme de pastille par type de poste (la couleur reste pilotee par le mode {modeColor==="etat"?"Etat":modeColor==="zone"?"Zone":"Type"})</div>
+          <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+            {[["RE","Rongeurs exterieurs (RE)"],["RI","Rongeurs interieurs (RI)"],["Blattes","Blattes"],["Insectes volants","Insectes volants"],["Teignes","Teignes"],["IPS","IPS"]].map(([cat,lib])=>(
+              <div key={cat} style={{ display:"flex", alignItems:"center", gap:10 }}>
+                <span style={{ fontSize:11, color:"#cbd5e1", width:180 }}>{lib}</span>
+                <div style={{ display:"flex", gap:4 }}>
+                  {FORMES_DISPO.map(f=>{
+                    var actif = (posteFormes[cat]||"rond")===f;
+                    return <button key={f} onClick={()=>setPosteForme(cat,f)}
+                      style={{ display:"flex", alignItems:"center", gap:5, background:actif?"#1d4ed8":"#1a2540", color:actif?"#fff":"#94a3b8", border:"1px solid "+(actif?"#3b82f6":"#3d5270"), borderRadius:6, padding:"4px 10px", fontSize:10, fontWeight:600, cursor:"pointer", fontFamily:"inherit" }}>
+                      <span style={{ display:"inline-block", background:actif?"#fff":"#94a3b8",
+                        width: f==="ovale"?14:11, height: f==="ovale"?9:11,
+                        borderRadius: (f==="rond"||f==="ovale")?"50%":f==="carre"?2:0,
+                        clipPath: f==="triangle"?"polygon(50% 0, 100% 100%, 0 100%)":"none" }}/>
+                      {f==="rond"?"Rond":f==="carre"?"Carre":f==="ovale"?"Ovale":"Triangle"}
+                    </button>;
+                  })}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       </React.Fragment>
       )}
     </div>
