@@ -575,6 +575,32 @@ function inpBlue(extra) {
   return { ...inp(), border: "1px solid #3b82f6", ...extra };
 }
 
+// Rend un element texte de plan en SVG, avec gras / italique / surlignage.
+// interactif = handlers de l editeur (gomme, selection) ; en vue plan il est nul.
+function renderTexteSVG(el, interactif) {
+  var fs = el.fontSize || 14;
+  var tA = el.anchorH === "gauche" ? "start" : el.anchorH === "droite" ? "end" : el.anchorH ? "middle" : "start";
+  var bL = el.anchorV === "haut" ? "hanging" : el.anchorV === "bas" ? "auto" : el.anchorV ? "central" : "auto";
+  var poids = el.bold ? 800 : 600;
+  var style = el.italic ? "italic" : "normal";
+  var texte = el.text || "";
+  var surlignage = null;
+  if (el.highlight) {
+    var w = texte.length * fs * 0.58 + fs * 0.4;
+    var h = fs * 1.25;
+    var rx = tA === "start" ? el.x1 - fs * 0.2 : tA === "end" ? el.x1 - w + fs * 0.2 : el.x1 - w / 2;
+    var ry = bL === "hanging" ? el.y1 - fs * 0.12 : bL === "auto" ? el.y1 - h + fs * 0.12 : el.y1 - h / 2;
+    surlignage = <rect x={rx} y={ry} width={w} height={h} fill="#fde047" rx="2"/>;
+  }
+  var handlers = interactif || {};
+  return (
+    <g key={el.id} opacity={handlers.opacity !== undefined ? handlers.opacity : 1} onClick={handlers.onClick} onMouseDown={handlers.onMouseDown} onDoubleClick={handlers.onDoubleClick} style={handlers.style}>
+      {surlignage}
+      <text x={el.x1} y={el.y1} fontSize={fs} fill={el.color} fontFamily="sans-serif" fontWeight={poids} fontStyle={style} textAnchor={tA} dominantBaseline={bL}>{texte}</text>
+    </g>
+  );
+}
+
 // ============================================================
 // CONSOMMATION APPAT - vocabulaire unique
 // Trois ecritures coexistent dans les donnees et designent le meme fait
@@ -10790,6 +10816,14 @@ function PlanEditor({ onClose, onSaved, existingPlan, backgroundImg, sourcePlanI
   const [strokeWidth, setStrokeWidth] = useState(2);
   const [textInput, setTextInput] = useState("");
   const [pendingTextPos, setPendingTextPos] = useState(null);
+  const [txtBold, setTxtBold] = useState(false);
+  const [txtItalic, setTxtItalic] = useState(false);
+  const [txtHighlight, setTxtHighlight] = useState(false);
+  const [dragEl, setDragEl] = useState(null);       // {id, startX, startY, orig} en cours de deplacement
+  const [clipboard, setClipboard] = useState(null); // element copie
+  const [editingText, setEditingText] = useState(null); // id du texte en cours de modification
+  const elementsRef = React.useRef(elements);
+  React.useEffect(()=>{ elementsRef.current = elements; }, [elements]);
   const [polyPoints, setPolyPoints] = useState(null); // pour outil polygone
   // Grille : nombre de cases reglable, aimantation et reperage A1/B2 optionnels.
   // Persistee avec le plan pour que les reperes restent stables entre deux ouvertures.
@@ -10797,6 +10831,10 @@ function PlanEditor({ onClose, onSaved, existingPlan, backgroundImg, sourcePlanI
   const [gridRows, setGridRows] = useState((grilleSauvee && grilleSauvee.gridRows) || existingPlan?.gridRows || 4);
   const [gridOn, setGridOn]     = useState(grilleSauvee ? grilleSauvee.gridOn : (existingPlan?.gridOn !== undefined ? existingPlan.gridOn : true));
   const [snapOn, setSnapOn]     = useState(grilleSauvee ? grilleSauvee.snapOn : (existingPlan?.snapOn !== undefined ? existingPlan.snapOn : true));
+  // Ancrage dans la case facon Excel : 9 positions. anchorH gauche|centre|droite,
+  // anchorV haut|milieu|bas. Applique au point aimante et a l alignement du texte.
+  const [anchorH, setAnchorH] = useState((grilleSauvee && grilleSauvee.anchorH) || "centre");
+  const [anchorV, setAnchorV] = useState((grilleSauvee && grilleSauvee.anchorV) || "milieu");
   const svgRef = React.useRef(null);
 
   const W = 900, H = 600;
@@ -10813,7 +10851,10 @@ function PlanEditor({ onClose, onSaved, existingPlan, backgroundImg, sourcePlanI
     if (!snapOn || !gridOn) return { x: Math.round(x), y: Math.round(y) };
     var col = Math.min(gridCols - 1, Math.max(0, Math.floor(x / cellW)));
     var row = Math.min(gridRows - 1, Math.max(0, Math.floor(y / cellH)));
-    return { x: Math.round((col + 0.5) * cellW), y: Math.round((row + 0.5) * cellH) };
+    var padX = cellW * 0.12, padY = cellH * 0.16;
+    var fx = anchorH === "gauche" ? padX : anchorH === "droite" ? cellW - padX : cellW / 2;
+    var fy = anchorV === "haut" ? padY : anchorV === "bas" ? cellH - padY : cellH / 2;
+    return { x: Math.round(col * cellW + fx), y: Math.round(row * cellH + fy) };
   }
   // Reference de case A1/B2 pour une coordonnee.
   function repereCase(x, y) {
@@ -10830,7 +10871,12 @@ function PlanEditor({ onClose, onSaved, existingPlan, backgroundImg, sourcePlanI
   }
 
   function handleMouseDown(e) {
-    if (tool === "select") return;
+    if (tool === "select") {
+      // Le drag est amorce par le onMouseDown de l element (setDragEl).
+      // Un clic dans le vide deselectionne.
+      if (!dragEl) setSelectedEl(null);
+      return;
+    }
     if (tool === "gomme") return; // géré au clic sur les éléments
     const { x, y } = getSvgCoords(e);
     if (tool === "texte") {
@@ -10849,6 +10895,39 @@ function PlanEditor({ onClose, onSaved, existingPlan, backgroundImg, sourcePlanI
     setDrawing({ tool, x1: x, y1: y, x2: x, y2: y, color, strokeWidth });
   }
 
+  // Translate un element de (dx,dy), quel que soit son type.
+  React.useEffect(() => {
+    function onKey(e) {
+      // On ignore les raccourcis quand on tape dans un champ.
+      var t = e.target && e.target.tagName;
+      if (t === "INPUT" || t === "TEXTAREA") return;
+      var ctrl = e.ctrlKey || e.metaKey;
+      if (ctrl && (e.key === "c" || e.key === "C") && selectedEl) {
+        var el = elementsRef.current.filter(x => x.id === selectedEl)[0];
+        if (el) setClipboard(el);
+      } else if (ctrl && (e.key === "v" || e.key === "V") && clipboard) {
+        e.preventDefault();
+        var copie = decalerElement({ ...clipboard, id: String(Date.now()) }, 18, 18);
+        setElements(prev => prev.concat([copie]));
+        setSelectedEl(copie.id);
+      } else if ((e.key === "Delete" || e.key === "Backspace") && selectedEl && tool === "select") {
+        e.preventDefault();
+        setElements(prev => prev.filter(x => x.id !== selectedEl));
+        setSelectedEl(null);
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [selectedEl, clipboard, tool]);
+
+  function decalerElement(el, dx, dy) {
+    var n = { ...el };
+    if (n.x1 !== undefined) { n.x1 += dx; n.y1 += dy; }
+    if (n.x2 !== undefined) { n.x2 += dx; n.y2 += dy; }
+    if (n.points) n.points = n.points.map(pt => ({ x: pt.x + dx, y: pt.y + dy }));
+    return n;
+  }
+
   function finishPolygon() {
     if (!polyPoints || polyPoints.length < 3) { setPolyPoints(null); return; }
     const newEl = { id: String(Date.now()), type: "polygone", points: polyPoints, color, strokeWidth };
@@ -10857,12 +10936,32 @@ function PlanEditor({ onClose, onSaved, existingPlan, backgroundImg, sourcePlanI
   }
 
   function handleMouseMove(e) {
+    if (dragEl) {
+      const rect = svgRef.current.getBoundingClientRect();
+      const mx = ((e.clientX - rect.left) / rect.width) * W;
+      const my = ((e.clientY - rect.top) / rect.height) * H;
+      var dx = mx - dragEl.startX, dy = my - dragEl.startY;
+      setElements(prev => prev.map(el => el.id === dragEl.id ? decalerElement(dragEl.orig, dx, dy) : el));
+      return;
+    }
     if (!drawing) return;
     const { x, y } = getSvgCoords(e);
     setDrawing(prev => ({ ...prev, x2: x, y2: y }));
   }
 
   function handleMouseUp() {
+    if (dragEl) {
+      // A la depose, on aimante le point d ancrage du texte sur la grille.
+      if (snapOn && gridOn) {
+        setElements(prev => prev.map(el => {
+          if (el.id !== dragEl.id || el.type !== "texte") return el;
+          var s = snap(el.x1, el.y1);
+          return { ...el, x1: s.x, y1: s.y };
+        }));
+      }
+      setDragEl(null);
+      return;
+    }
     if (!drawing) return;
     if (Math.abs(drawing.x2 - drawing.x1) < 3 && Math.abs(drawing.y2 - drawing.y1) < 3) {
       setDrawing(null);
@@ -10874,11 +10973,37 @@ function PlanEditor({ onClose, onSaved, existingPlan, backgroundImg, sourcePlanI
   }
 
   function addText() {
+    if (editingText) {
+      setElements(prev => prev.map(el => el.id === editingText
+        ? { ...el, text: textInput, bold: txtBold, italic: txtItalic, highlight: txtHighlight }
+        : el));
+      setEditingText(null); setTextInput("");
+      return;
+    }
     if (!textInput.trim() || !pendingTextPos) { setPendingTextPos(null); return; }
-    const newEl = { id: String(Date.now()), type: "texte", x1: pendingTextPos.x, y1: pendingTextPos.y, text: textInput, color, fontSize: 14 };
+    const newEl = { id: String(Date.now()), type: "texte", x1: pendingTextPos.x, y1: pendingTextPos.y, text: textInput, color, fontSize: 14, anchorH: snapOn && gridOn ? anchorH : "gauche", anchorV: snapOn && gridOn ? anchorV : "haut", bold: txtBold, italic: txtItalic, highlight: txtHighlight };
     setElements(prev => [...prev, newEl]);
     setTextInput("");
     setPendingTextPos(null);
+  }
+
+  // Handlers communs a tous les elements : selection, gomme, amorce de drag,
+  // et double-clic pour rouvrir un texte en edition.
+  function amorcerDrag(el, e) {
+    if (tool !== "select") return;
+    const rect = svgRef.current.getBoundingClientRect();
+    const mx = ((e.clientX - rect.left) / rect.width) * W;
+    const my = ((e.clientY - rect.top) / rect.height) * H;
+    setSelectedEl(el.id);
+    setDragEl({ id: el.id, startX: mx, startY: my, orig: el });
+  }
+  function elHandlers(el) {
+    return {
+      onMouseDown: (e) => { if (tool === "select") { e.stopPropagation(); amorcerDrag(el, e); } },
+      onClick: () => { if (tool === "gomme") setElements(prev => prev.filter(e => e.id !== el.id)); else if (tool === "select") setSelectedEl(el.id); },
+      onDoubleClick: () => { if (el.type === "texte" && tool === "select") { setEditingText(el.id); setTextInput(el.text || ""); setTxtBold(!!el.bold); setTxtItalic(!!el.italic); setTxtHighlight(!!el.highlight); } },
+      style: { cursor: tool === "gomme" ? "crosshair" : tool === "select" ? "move" : "default" }
+    };
   }
 
   function deleteElement(id) {
@@ -10895,11 +11020,11 @@ function PlanEditor({ onClose, onSaved, existingPlan, backgroundImg, sourcePlanI
     const id = existingPlan?.id || String(Date.now());
     // La grille voyage dans le JSON elements sous une entree meta (type "__grille"),
     // ce qui evite d ajouter des colonnes a plans_dessines. Le rendu ignore ce type.
-    const grilleMeta = { id: "__grille", type: "__grille", gridCols, gridRows, gridOn, snapOn };
+    const grilleMeta = { id: "__grille", type: "__grille", gridCols, gridRows, gridOn, snapOn, anchorH, anchorV };
     const elementsAvecMeta = elements.filter(e => e.type !== "__grille").concat([grilleMeta]);
     const planData = { id, contrat: CLIENT_CONFIG.contrat, label: label.trim(), elements: JSON.stringify(elementsAvecMeta), background_img: backgroundImg || existingPlan?.backgroundImg || "" };
     await sbUpsert("plans_dessines", planData);
-    if (onSaved) onSaved({ id, label: label.trim(), elements: elementsAvecMeta, backgroundImg: backgroundImg || existingPlan?.backgroundImg, gridCols, gridRows, gridOn, snapOn });
+    if (onSaved) onSaved({ id, label: label.trim(), elements: elementsAvecMeta, backgroundImg: backgroundImg || existingPlan?.backgroundImg, gridCols, gridRows, gridOn, snapOn, anchorH, anchorV });
     if (onClose) onClose();
   }
 
@@ -10952,6 +11077,17 @@ function PlanEditor({ onClose, onSaved, existingPlan, backgroundImg, sourcePlanI
             <span style={{ fontSize:11, color:"#7a90aa" }}>Lignes</span>
             <input type="number" min="1" max="40" value={gridRows} onChange={e=>setGridRows(Math.min(40,Math.max(1,parseInt(e.target.value)||1)))}
               style={{ width:44, background:"#243352", border:"1px solid #3d5270", borderRadius:6, padding:"4px 6px", color:"#f1f5f9", fontSize:11, fontFamily:"inherit" }}/>
+            {snapOn && gridOn && (
+              <div title="Position dans la case" style={{ display:"grid", gridTemplateColumns:"repeat(3,14px)", gridTemplateRows:"repeat(3,14px)", gap:2, marginLeft:4, background:"#243352", border:"1px solid #3d5270", borderRadius:6, padding:3 }}>
+                {["haut","milieu","bas"].map(v => ["gauche","centre","droite"].map(h => {
+                  var actif = anchorH===h && anchorV===v;
+                  return <button key={h+v} onClick={()=>{ setAnchorH(h); setAnchorV(v); }} title={h+" "+v}
+                    style={{ width:14, height:14, padding:0, borderRadius:2, cursor:"pointer",
+                             background: actif ? "#1d4ed8" : "#1a2540",
+                             border:"1px solid "+(actif?"#3b82f6":"#3d5270") }}/>;
+                }))}
+              </div>
+            )}
           </div>
           <button onClick={undoLast} disabled={elements.length===0}
             style={{ background:"#f59e0b22", color:"#f59e0b", border:"1px solid #f59e0b44", borderRadius:7, padding:"6px 12px", fontSize:12, fontWeight:700, cursor:elements.length?"pointer":"default", fontFamily:"inherit", opacity:elements.length?1:0.4, marginLeft:"auto" }}>
@@ -10993,27 +11129,27 @@ function PlanEditor({ onClose, onSaved, existingPlan, backgroundImg, sourcePlanI
               const isSel = selectedEl === el.id;
               if (el.type === "trait") {
                 return <line key={el.id} x1={el.x1} y1={el.y1} x2={el.x2} y2={el.y2} stroke={el.color} strokeWidth={el.strokeWidth} strokeLinecap="round"
-                  onClick={()=>{ if(tool==="gomme") setElements(prev=>prev.filter(e=>e.id!==el.id)); else if(tool==="select") setSelectedEl(el.id); }} style={{cursor:tool==="gomme"?"crosshair":tool==="select"?"pointer":"default"}}
+                  {...elHandlers(el)}
                   opacity={isSel?0.6:1}/>;
               }
               if (el.type === "rect") {
                 const x = Math.min(el.x1, el.x2), y = Math.min(el.y1, el.y2);
                 const w = Math.abs(el.x2-el.x1), h = Math.abs(el.y2-el.y1);
                 return <rect key={el.id} x={x} y={y} width={w} height={h} fill="none" stroke={el.color} strokeWidth={el.strokeWidth}
-                  onClick={()=>{ if(tool==="gomme") setElements(prev=>prev.filter(e=>e.id!==el.id)); else if(tool==="select") setSelectedEl(el.id); }} style={{cursor:tool==="gomme"?"crosshair":tool==="select"?"pointer":"default"}}
+                  {...elHandlers(el)}
                   opacity={isSel?0.6:1}/>;
               }
               if (el.type === "cercle") {
                 const cx = (el.x1+el.x2)/2, cy = (el.y1+el.y2)/2;
                 const rx = Math.abs(el.x2-el.x1)/2, ry = Math.abs(el.y2-el.y1)/2;
                 return <ellipse key={el.id} cx={cx} cy={cy} rx={rx} ry={ry} fill="none" stroke={el.color} strokeWidth={el.strokeWidth}
-                  onClick={()=>{ if(tool==="gomme") setElements(prev=>prev.filter(e=>e.id!==el.id)); else if(tool==="select") setSelectedEl(el.id); }} style={{cursor:tool==="gomme"?"crosshair":tool==="select"?"pointer":"default"}}
+                  {...elHandlers(el)}
                   opacity={isSel?0.6:1}/>;
               }
               if (el.type === "triangle") {
                 const x1=el.x1, y1=el.y2, x2=el.x2, y2=el.y2, x3=(el.x1+el.x2)/2, y3=el.y1;
                 return <polygon key={el.id} points={x1+","+y1+" "+x2+","+y2+" "+x3+","+y3} fill="none" stroke={el.color} strokeWidth={el.strokeWidth}
-                  onClick={()=>{ if(tool==="gomme") setElements(prev=>prev.filter(e=>e.id!==el.id)); else if(tool==="select") setSelectedEl(el.id); }} style={{cursor:tool==="gomme"?"crosshair":tool==="select"?"pointer":"default"}}
+                  {...elHandlers(el)}
                   opacity={isSel?0.6:1}/>;
               }
               if (el.type === "fleche") {
@@ -11022,7 +11158,7 @@ function PlanEditor({ onClose, onSaved, existingPlan, backgroundImg, sourcePlanI
                 const ax1 = el.x2 - len*Math.cos(angle-Math.PI/6), ay1 = el.y2 - len*Math.sin(angle-Math.PI/6);
                 const ax2 = el.x2 - len*Math.cos(angle+Math.PI/6), ay2 = el.y2 - len*Math.sin(angle+Math.PI/6);
                 return (
-                  <g key={el.id} onClick={()=>{ if(tool==="gomme") setElements(prev=>prev.filter(e=>e.id!==el.id)); else if(tool==="select") setSelectedEl(el.id); }} style={{cursor:tool==="gomme"?"crosshair":tool==="select"?"pointer":"default"}} opacity={isSel?0.6:1}>
+                  <g key={el.id} {...elHandlers(el)} opacity={isSel?0.6:1}>
                     <line x1={el.x1} y1={el.y1} x2={el.x2} y2={el.y2} stroke={el.color} strokeWidth={el.strokeWidth} strokeLinecap="round"/>
                     <line x1={el.x2} y1={el.y2} x2={ax1} y2={ay1} stroke={el.color} strokeWidth={el.strokeWidth} strokeLinecap="round"/>
                     <line x1={el.x2} y1={el.y2} x2={ax2} y2={ay2} stroke={el.color} strokeWidth={el.strokeWidth} strokeLinecap="round"/>
@@ -11032,14 +11168,14 @@ function PlanEditor({ onClose, onSaved, existingPlan, backgroundImg, sourcePlanI
               if (el.type === "polygone") {
                 const pts = el.points.map(p=>p.x+","+p.y).join(" ");
                 return <polygon key={el.id} points={pts} fill="none" stroke={el.color} strokeWidth={el.strokeWidth}
-                  onClick={()=>{ if(tool==="gomme") setElements(prev=>prev.filter(e=>e.id!==el.id)); else if(tool==="select") setSelectedEl(el.id); }} style={{cursor:tool==="gomme"?"crosshair":tool==="select"?"pointer":"default"}}
+                  {...elHandlers(el)}
                   opacity={isSel?0.6:1}/>;
               }
               if (el.type === "porte") {
                 const x = Math.min(el.x1,el.x2), y = Math.min(el.y1,el.y2);
                 const w = Math.abs(el.x2-el.x1) || 40;
                 return (
-                  <g key={el.id} onClick={()=>{ if(tool==="gomme") setElements(prev=>prev.filter(e=>e.id!==el.id)); else if(tool==="select") setSelectedEl(el.id); }} style={{cursor:tool==="gomme"?"crosshair":tool==="select"?"pointer":"default"}} opacity={isSel?0.6:1}>
+                  <g key={el.id} {...elHandlers(el)} opacity={isSel?0.6:1}>
                     <line x1={x} y1={y} x2={x} y2={y+w} stroke={el.color} strokeWidth={el.strokeWidth}/>
                     <path d={"M "+x+" "+y+" A "+w+" "+w+" 0 0 1 "+(x+w)+" "+y} fill="none" stroke={el.color} strokeWidth="1" strokeDasharray="3,3"/>
                     <line x1={x} y1={y} x2={x+w} y2={y} stroke={el.color} strokeWidth={el.strokeWidth}/>
@@ -11050,16 +11186,14 @@ function PlanEditor({ onClose, onSaved, existingPlan, backgroundImg, sourcePlanI
                 const x = Math.min(el.x1,el.x2), y = Math.min(el.y1,el.y2);
                 const w = Math.abs(el.x2-el.x1) || 40, h = Math.abs(el.y2-el.y1) || 10;
                 return (
-                  <g key={el.id} onClick={()=>{ if(tool==="gomme") setElements(prev=>prev.filter(e=>e.id!==el.id)); else if(tool==="select") setSelectedEl(el.id); }} style={{cursor:tool==="gomme"?"crosshair":tool==="select"?"pointer":"default"}} opacity={isSel?0.6:1}>
+                  <g key={el.id} {...elHandlers(el)} opacity={isSel?0.6:1}>
                     <rect x={x} y={y} width={w} height={h} fill="none" stroke={el.color} strokeWidth={el.strokeWidth}/>
                     <line x1={x} y1={y+h/2} x2={x+w} y2={y+h/2} stroke={el.color} strokeWidth={el.strokeWidth}/>
                   </g>
                 );
               }
               if (el.type === "texte") {
-                return <text key={el.id} x={el.x1} y={el.y1} fontSize={el.fontSize||14} fill={el.color} fontFamily="sans-serif" fontWeight="600"
-                  onClick={()=>{ if(tool==="gomme") setElements(prev=>prev.filter(e=>e.id!==el.id)); else if(tool==="select") setSelectedEl(el.id); }} style={{cursor:tool==="gomme"?"crosshair":tool==="select"?"pointer":"default"}}
-                  opacity={isSel?0.6:1}>{el.text}</text>;
+                return renderTexteSVG(el, { ...elHandlers(el), opacity: isSel ? 0.6 : 1 });
               }
               return null;
             })}
@@ -11093,10 +11227,28 @@ function PlanEditor({ onClose, onSaved, existingPlan, backgroundImg, sourcePlanI
           </svg>
 
           {/* Popup ajout texte */}
-          {pendingTextPos && (
+          {editingText && (
+            <div style={{ position:"absolute", left:"50%", top:12, transform:"translateX(-50%)", background:"#243352", border:"1px solid #3b82f6", borderRadius:8, padding:8, display:"flex", gap:6, zIndex:11, alignItems:"center" }}>
+              <span style={{ fontSize:11, color:"#7a90aa", fontWeight:700 }}>Modifier</span>
+              <input autoFocus value={textInput} onChange={e=>setTextInput(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")addText();if(e.key==="Escape"){setEditingText(null);setTextInput("");}}}
+                style={{ background:"#1a2540", border:"1px solid #3d5270", borderRadius:5, padding:"4px 8px", color:"#f1f5f9", fontSize:12, fontFamily:"inherit", fontWeight:txtBold?800:400, fontStyle:txtItalic?"italic":"normal" }}/>
+              <button onClick={()=>setTxtBold(v=>!v)} style={{ background:txtBold?"#1d4ed8":"#1a2540", color:txtBold?"#fff":"#94a3b8", border:"1px solid "+(txtBold?"#3b82f6":"#3d5270"), borderRadius:5, padding:"4px 9px", fontSize:12, fontWeight:800, cursor:"pointer", fontFamily:"inherit" }}>B</button>
+              <button onClick={()=>setTxtItalic(v=>!v)} style={{ background:txtItalic?"#1d4ed8":"#1a2540", color:txtItalic?"#fff":"#94a3b8", border:"1px solid "+(txtItalic?"#3b82f6":"#3d5270"), borderRadius:5, padding:"4px 9px", fontSize:12, fontStyle:"italic", fontWeight:700, cursor:"pointer", fontFamily:"inherit" }}>I</button>
+              <button onClick={()=>setTxtHighlight(v=>!v)} style={{ background:txtHighlight?"#facc15":"#1a2540", color:txtHighlight?"#1a2540":"#94a3b8", border:"1px solid "+(txtHighlight?"#facc15":"#3d5270"), borderRadius:5, padding:"4px 9px", fontSize:12, fontWeight:700, cursor:"pointer", fontFamily:"inherit" }}>S</button>
+              <button onClick={addText} style={{ background:"#22c55e", color:"#fff", border:"none", borderRadius:5, padding:"4px 10px", fontSize:11, fontWeight:700, cursor:"pointer" }}>OK</button>
+              <button onClick={()=>{setEditingText(null);setTextInput("");}} style={{ background:"transparent", color:"#7a90aa", border:"1px solid #3d5270", borderRadius:5, padding:"4px 8px", fontSize:11, cursor:"pointer" }}>Annuler</button>
+            </div>
+          )}
+          {pendingTextPos && !editingText && (
             <div style={{ position:"absolute", left:(pendingTextPos.x/W*100)+"%", top:(pendingTextPos.y/H*100)+"%", background:"#243352", border:"1px solid #3b82f6", borderRadius:8, padding:8, display:"flex", gap:6, zIndex:10 }}>
               <input autoFocus value={textInput} onChange={e=>setTextInput(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")addText();if(e.key==="Escape")setPendingTextPos(null);}}
-                placeholder="Texte..." style={{ background:"#1a2540", border:"1px solid #3d5270", borderRadius:5, padding:"4px 8px", color:"#f1f5f9", fontSize:12, fontFamily:"inherit" }}/>
+                placeholder="Texte..." style={{ background:"#1a2540", border:"1px solid #3d5270", borderRadius:5, padding:"4px 8px", color:"#f1f5f9", fontSize:12, fontFamily:"inherit", fontWeight:txtBold?800:400, fontStyle:txtItalic?"italic":"normal" }}/>
+              <button onClick={()=>setTxtBold(v=>!v)} title="Gras"
+                style={{ background:txtBold?"#1d4ed8":"#1a2540", color:txtBold?"#fff":"#94a3b8", border:"1px solid "+(txtBold?"#3b82f6":"#3d5270"), borderRadius:5, padding:"4px 9px", fontSize:12, fontWeight:800, cursor:"pointer", fontFamily:"inherit" }}>B</button>
+              <button onClick={()=>setTxtItalic(v=>!v)} title="Italique"
+                style={{ background:txtItalic?"#1d4ed8":"#1a2540", color:txtItalic?"#fff":"#94a3b8", border:"1px solid "+(txtItalic?"#3b82f6":"#3d5270"), borderRadius:5, padding:"4px 9px", fontSize:12, fontStyle:"italic", fontWeight:700, cursor:"pointer", fontFamily:"inherit" }}>I</button>
+              <button onClick={()=>setTxtHighlight(v=>!v)} title="Surligner"
+                style={{ background:txtHighlight?"#facc15":"#1a2540", color:txtHighlight?"#1a2540":"#94a3b8", border:"1px solid "+(txtHighlight?"#facc15":"#3d5270"), borderRadius:5, padding:"4px 9px", fontSize:12, fontWeight:700, cursor:"pointer", fontFamily:"inherit" }}>S</button>
               <button onClick={addText} style={{ background:"#22c55e", color:"#fff", border:"none", borderRadius:5, padding:"4px 10px", fontSize:11, fontWeight:700, cursor:"pointer" }}>OK</button>
             </div>
           )}
@@ -12179,7 +12331,7 @@ function PlanImplantation({ seuilsGlobaux }) {
                             if (el.type==="polygone") { const pts2=(el.points||[]).map(p=>p.x+","+p.y).join(" "); return <polygon key={el.id} points={pts2} fill="none" stroke={el.color} strokeWidth={el.strokeWidth}/>; }
                             if (el.type==="porte") { const x=Math.min(el.x1,el.x2),y=Math.min(el.y1,el.y2),w=Math.abs(el.x2-el.x1)||40; return (<g key={el.id}><line x1={x} y1={y} x2={x} y2={y+w} stroke={el.color} strokeWidth={el.strokeWidth}/><path d={"M "+x+" "+y+" A "+w+" "+w+" 0 0 1 "+(x+w)+" "+y} fill="none" stroke={el.color} strokeWidth="1" strokeDasharray="3,3"/><line x1={x} y1={y} x2={x+w} y2={y} stroke={el.color} strokeWidth={el.strokeWidth}/></g>); }
                             if (el.type==="fenetre") { const x=Math.min(el.x1,el.x2),y=Math.min(el.y1,el.y2),w=Math.abs(el.x2-el.x1)||40,h=Math.abs(el.y2-el.y1)||10; return (<g key={el.id}><rect x={x} y={y} width={w} height={h} fill="none" stroke={el.color} strokeWidth={el.strokeWidth}/><line x1={x} y1={y+h/2} x2={x+w} y2={y+h/2} stroke={el.color} strokeWidth={el.strokeWidth}/></g>); }
-                            if (el.type==="texte") return <text key={el.id} x={el.x1} y={el.y1} fontSize={el.fontSize||14} fill={el.color} fontFamily="sans-serif" fontWeight="600">{el.text}</text>;
+                            if (el.type==="texte") return renderTexteSVG(el, null);
                             return null;
                           })}
                         </svg>
@@ -12222,7 +12374,7 @@ function PlanImplantation({ seuilsGlobaux }) {
                     if (el.type==="polygone") { const pts=(el.points||[]).map(p=>p.x+","+p.y).join(" "); return <polygon key={el.id} points={pts} fill="none" stroke={el.color} strokeWidth={el.strokeWidth}/>; }
                     if (el.type==="porte") { const x=Math.min(el.x1,el.x2),y=Math.min(el.y1,el.y2),w=Math.abs(el.x2-el.x1)||40; return (<g key={el.id}><line x1={x} y1={y} x2={x} y2={y+w} stroke={el.color} strokeWidth={el.strokeWidth}/><path d={"M "+x+" "+y+" A "+w+" "+w+" 0 0 1 "+(x+w)+" "+y} fill="none" stroke={el.color} strokeWidth="1" strokeDasharray="3,3"/><line x1={x} y1={y} x2={x+w} y2={y} stroke={el.color} strokeWidth={el.strokeWidth}/></g>); }
                     if (el.type==="fenetre") { const x=Math.min(el.x1,el.x2),y=Math.min(el.y1,el.y2),w=Math.abs(el.x2-el.x1)||40,h=Math.abs(el.y2-el.y1)||10; return (<g key={el.id}><rect x={x} y={y} width={w} height={h} fill="none" stroke={el.color} strokeWidth={el.strokeWidth}/><line x1={x} y1={y+h/2} x2={x+w} y2={y+h/2} stroke={el.color} strokeWidth={el.strokeWidth}/></g>); }
-                    if (el.type==="texte") return <text key={el.id} x={el.x1} y={el.y1} fontSize={el.fontSize||14} fill={el.color} fontFamily="sans-serif" fontWeight="600">{el.text}</text>;
+                    if (el.type==="texte") return renderTexteSVG(el, null);
                     return null;
                   })}
                 </svg>
