@@ -11524,8 +11524,8 @@ function PlanImplantation({ seuilsGlobaux }) {
     if (modeColor==="type") {
       const nuisible = poste.nuisible||"Rongeurs";
       if (nuisible==="Rongeurs") {
-        if (poste.type==="RE") return "#1e40af";
-        if (poste.type==="RI") return "#60a5fa";
+        if (poste.type==="RE") return nuisibleColors["__RE"]||"#1e40af";
+        if (poste.type==="RI") return nuisibleColors["__RI"]||"#60a5fa";
         return nuisibleColors["Rongeurs"]||"#3b82f6";
       }
       return nuisibleColors[nuisible]||"#7a90aa";
@@ -11820,7 +11820,7 @@ function PlanImplantation({ seuilsGlobaux }) {
       if (modeColor==="etat") {
         legends = [["#22c55e","Sans activité"],["#f59e0b","Partielle"],["#ef4444","Totale / Capture"]];
       } else if (modeColor==="type") {
-        legends = [["#1e40af","Rongeurs ext. (RE)"],["#60a5fa","Rongeurs int. (RI)"], ...NUISIBLES_LIST.filter(n=>n!=="Rongeurs").map(n=>[nuisibleColors[n]||"#7a90aa",n])];
+        legends = [[nuisibleColors["__RE"]||"#1e40af","Rongeurs ext. (RE)"],[nuisibleColors["__RI"]||"#60a5fa","Rongeurs int. (RI)"], ...NUISIBLES_LIST.filter(n=>n!=="Rongeurs").map(n=>[nuisibleColors[n]||"#7a90aa",n])];
       } else if (modeColor==="zone") {
         const zoneColors = {"Exterieur":"#3b82f6","Locaux techniques":"#f59e0b","Combles":"#8b5cf6","Emballages":"#22c55e","Conditionnement":"#ef4444","Bureaux":"#06b6d4","Maintenance":"#84cc16","Stockage":"#f97316","Autres":"#7a90aa"};
         legends = Object.entries(zoneColors);
@@ -11911,7 +11911,7 @@ function PlanImplantation({ seuilsGlobaux }) {
       if (modeColor==="etat") {
         legendsC = [["#22c55e","Sans activité"],["#f59e0b","Partielle"],["#ef4444","Totale / Capture"]];
       } else if (modeColor==="type") {
-        legendsC = [["#1e40af","Rongeurs ext."],["#60a5fa","Rongeurs int."], ...NUISIBLES_LIST.filter(n=>n!=="Rongeurs").map(n=>[nuisibleColors[n]||"#7a90aa",n])];
+        legendsC = [[nuisibleColors["__RE"]||"#1e40af","Rongeurs ext."],[nuisibleColors["__RI"]||"#60a5fa","Rongeurs int."], ...NUISIBLES_LIST.filter(n=>n!=="Rongeurs").map(n=>[nuisibleColors[n]||"#7a90aa",n])];
       } else if (modeColor==="zone") {
         const zoneColors = {"Exterieur":"#3b82f6","Locaux techniques":"#f59e0b","Combles":"#8b5cf6","Emballages":"#22c55e","Conditionnement":"#ef4444","Bureaux":"#06b6d4","Maintenance":"#84cc16","Stockage":"#f97316","Autres":"#7a90aa"};
         legendsC = Object.entries(zoneColors);
@@ -12573,10 +12573,10 @@ function PlanImplantation({ seuilsGlobaux }) {
         )}
         {modeColor==="type"&&(
           <div style={{display:"flex",flexWrap:"wrap",gap:10}}>
-            <div style={{display:"flex",alignItems:"center",gap:5}}><span style={{width:10,height:10,borderRadius:"50%",background:"#1e40af",display:"inline-block"}}/><span style={{fontSize:11,color:"#7a90aa"}}>Rongeurs ext. (RE)</span></div>
-            <div style={{display:"flex",alignItems:"center",gap:5}}><span style={{width:10,height:10,borderRadius:"50%",background:"#60a5fa",display:"inline-block"}}/><span style={{fontSize:11,color:"#7a90aa"}}>Rongeurs int. (RI)</span></div>
+            <div style={{display:"flex",alignItems:"center",gap:5}}><span style={{width:10,height:10,borderRadius:"50%",background:nuisibleColors["__RE"]||"#1e40af",display:"inline-block"}}/><span style={{fontSize:11,color:"#7a90aa"}}>Rongeurs ext. (RE)</span></div>
+            <div style={{display:"flex",alignItems:"center",gap:5}}><span style={{width:10,height:10,borderRadius:"50%",background:nuisibleColors["__RI"]||"#60a5fa",display:"inline-block"}}/><span style={{fontSize:11,color:"#7a90aa"}}>Rongeurs int. (RI)</span></div>
             {NUISIBLES_LIST.filter(n=>n!=="Rongeurs").map(n=>{
-              const col=NUISIBLE_COLORS[n]||"#7a90aa";
+              const col=nuisibleColors[n]||"#7a90aa";
               const count=postes.filter(p=>(p.nuisible||"Rongeurs")===n).length;
               return(<div key={n} style={{display:"flex",alignItems:"center",gap:5}}><span style={{width:10,height:10,borderRadius:"50%",background:col,display:"inline-block"}}/><span style={{fontSize:11,color:"#7a90aa"}}>{n} ({count})</span></div>);
             })}
@@ -12595,6 +12595,14 @@ function PlanImplantation({ seuilsGlobaux }) {
             {[["RE","Rongeurs exterieurs (RE)"],["RI","Rongeurs interieurs (RI)"],["Blattes","Blattes"],["Insectes volants","Insectes volants"],["Teignes","Teignes"],["IPS","IPS"]].map(([cat,lib])=>(
               <div key={cat} style={{ display:"flex", alignItems:"center", gap:10 }}>
                 <span style={{ fontSize:11, color:"#cbd5e1", width:180 }}>{lib}</span>
+                <div style={{ display:"flex", gap:3, marginRight:4 }}>
+                  {["#1e40af","#60a5fa","#3b82f6","#ef4444","#eab308","#22c55e","#8b5cf6","#f97316","#7a90aa"].map(c=>{
+                    var cle = cat==="RE"?"__RE":cat==="RI"?"__RI":cat;
+                    var actifC = (nuisibleColors[cle]||"")===c;
+                    return <button key={c} title="Couleur de ce type" onClick={()=>setNuisibleColor(cle,c)}
+                      style={{ width:18, height:18, borderRadius:"50%", background:c, border:actifC?"3px solid #fff":"1px solid #3d5270", cursor:"pointer", padding:0 }}/>;
+                  })}
+                </div>
                 <div style={{ display:"flex", gap:4 }}>
                   {FORMES_DISPO.map(f=>{
                     var actif = (posteFormes[cat]||"rond")===f;
