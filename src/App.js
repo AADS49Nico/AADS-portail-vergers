@@ -319,7 +319,7 @@ const NUISIBLES_LIST = ["Rongeurs", "Blattes", "Insectes volants", "Teignes", "I
 // Forme de pastille par categorie de poste. La couleur reste pilotee par le mode
 // (Etat/Type/Zone) : forme et couleur sont deux axes independants.
 // Categories : RE, RI (rongeurs ext/int), puis un nuisible non-rongeur par nom.
-const FORMES_DISPO = ["rond", "carre", "ovale", "triangle"];
+const FORMES_DISPO = ["rond", "carre", "rect", "ovale", "triangle"];
 const POSTE_FORMES_DEFAUT = {
   RE: "rond", RI: "rond",
   "Blattes": "carre", "Insectes volants": "triangle", "Teignes": "ovale", "IPS": "carre",
@@ -338,6 +338,7 @@ function PuceForme({ forme, col, taille }) {
   var t = taille || 10;
   if (forme === "triangle") return <svg width={t} height={t} viewBox="0 0 10 10" style={{display:"inline-block",verticalAlign:"middle"}}><polygon points="5,1 9,9 1,9" fill={col}/></svg>;
   if (forme === "carre") return <span style={{display:"inline-block",width:t,height:t,background:col,borderRadius:2}}/>;
+  if (forme === "rect") return <span style={{display:"inline-block",width:t*1.5,height:t*0.7,background:col,borderRadius:2}}/>;
   if (forme === "ovale") return <span style={{display:"inline-block",width:t*1.35,height:t*0.75,background:col,borderRadius:"50%"}}/>;
   return <span style={{display:"inline-block",width:t,height:t,background:col,borderRadius:"50%"}}/>;
 }
@@ -353,6 +354,10 @@ function svgPastilleForme(forme, x, y, r, col, ns) {
     shape = document.createElementNS(ns, "rect");
     shape.setAttribute("x", x-r); shape.setAttribute("y", y-r);
     shape.setAttribute("width", r*2); shape.setAttribute("height", r*2); shape.setAttribute("rx", 2);
+  } else if (forme === "rect") {
+    shape = document.createElementNS(ns, "rect");
+    shape.setAttribute("x", x-r*1.45); shape.setAttribute("y", y-r*0.72);
+    shape.setAttribute("width", r*2.9); shape.setAttribute("height", r*1.44); shape.setAttribute("rx", 2);
   } else if (forme === "ovale") {
     shape = document.createElementNS(ns, "ellipse");
     shape.setAttribute("cx", x); shape.setAttribute("cy", y);
@@ -375,6 +380,8 @@ function canvasPastilleForme(ctx, forme, x, y, r, col) {
     ctx.moveTo(x, y - h*0.55); ctx.lineTo(x + r*1.15, y + h*0.45); ctx.lineTo(x - r*1.15, y + h*0.45); ctx.closePath();
   } else if (forme === "carre") {
     ctx.rect(x - r, y - r, r*2, r*2);
+  } else if (forme === "rect") {
+    ctx.rect(x - r*1.45, y - r*0.72, r*2.9, r*1.44);
   } else if (forme === "ovale") {
     ctx.ellipse(x, y, r*1.3, r*0.78, 0, 0, Math.PI*2);
   } else {
@@ -11468,6 +11475,7 @@ function PlanImplantation({ seuilsGlobaux }) {
     }
     var st = { width:taille, height:taille, background:col, border:"2px solid #fff", boxShadow:ombre, display:"flex", alignItems:"center", justifyContent:"center", cursor:"grab", userSelect:"none", boxSizing:"border-box", transform:scale, transition:"transform 0.05s", position:"relative" };
     if (forme === "carre") st.borderRadius = 3;
+    else if (forme === "rect") { st.width = taille * 1.5; st.height = taille * 0.75; st.borderRadius = 3; }
     else if (forme === "ovale") { st.width = taille * 1.35; st.height = taille * 0.8; st.borderRadius = "50%"; }
     else st.borderRadius = "50%";
     return <div style={st}>{labelNode}</div>;
@@ -12637,10 +12645,10 @@ function PlanImplantation({ seuilsGlobaux }) {
                     return <button key={f} onClick={()=>setPosteForme(cat,f)}
                       style={{ display:"flex", alignItems:"center", gap:5, background:actif?"#1d4ed8":"#1a2540", color:actif?"#fff":"#94a3b8", border:"1px solid "+(actif?"#3b82f6":"#3d5270"), borderRadius:6, padding:"4px 10px", fontSize:10, fontWeight:600, cursor:"pointer", fontFamily:"inherit" }}>
                       <span style={{ display:"inline-block", background:actif?"#fff":"#94a3b8",
-                        width: f==="ovale"?14:11, height: f==="ovale"?9:11,
-                        borderRadius: (f==="rond"||f==="ovale")?"50%":f==="carre"?2:0,
+                        width: f==="ovale"?14:f==="rect"?16:11, height: f==="ovale"?9:f==="rect"?8:11,
+                        borderRadius: (f==="rond"||f==="ovale")?"50%":(f==="carre"||f==="rect")?2:0,
                         clipPath: f==="triangle"?"polygon(50% 0, 100% 100%, 0 100%)":"none" }}/>
-                      {f==="rond"?"Rond":f==="carre"?"Carre":f==="ovale"?"Ovale":"Triangle"}
+                      {f==="rond"?"Rond":f==="carre"?"Carre":f==="rect"?"Rectangle":f==="ovale"?"Ovale":"Triangle"}
                     </button>;
                   })}
                 </div>
