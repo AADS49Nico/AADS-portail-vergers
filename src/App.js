@@ -10873,6 +10873,7 @@ function PlanEditor({ onClose, onSaved, existingPlan, backgroundImg, sourcePlanI
   const [selectedEl, setSelectedEl] = useState(null);
   const [color, setColor] = useState("#3b82f6");
   const [strokeWidth, setStrokeWidth] = useState(2);
+  const [fillShape, setFillShape] = useState(false); // formes pleines
   const [textInput, setTextInput] = useState("");
   const [pendingTextPos, setPendingTextPos] = useState(null);
   const [txtBold, setTxtBold] = useState(false);
@@ -10989,7 +10990,7 @@ function PlanEditor({ onClose, onSaved, existingPlan, backgroundImg, sourcePlanI
 
   function finishPolygon() {
     if (!polyPoints || polyPoints.length < 3) { setPolyPoints(null); return; }
-    const newEl = { id: String(Date.now()), type: "polygone", points: polyPoints, color, strokeWidth };
+    const newEl = { id: String(Date.now()), type: "polygone", points: polyPoints, color, strokeWidth, filled: fillShape };
     setElements(prev => [...prev, newEl]);
     setPolyPoints(null);
   }
@@ -11026,7 +11027,7 @@ function PlanEditor({ onClose, onSaved, existingPlan, backgroundImg, sourcePlanI
       setDrawing(null);
       return;
     }
-    const newEl = { id: String(Date.now()), type: drawing.tool, x1: drawing.x1, y1: drawing.y1, x2: drawing.x2, y2: drawing.y2, color: drawing.color, strokeWidth: drawing.strokeWidth };
+    const newEl = { id: String(Date.now()), type: drawing.tool, x1: drawing.x1, y1: drawing.y1, x2: drawing.x2, y2: drawing.y2, color: drawing.color, strokeWidth: drawing.strokeWidth, filled: fillShape };
     setElements(prev => [...prev, newEl]);
     setDrawing(null);
   }
@@ -11087,7 +11088,7 @@ function PlanEditor({ onClose, onSaved, existingPlan, backgroundImg, sourcePlanI
     if (onClose) onClose();
   }
 
-  const COLORS = ["#3b82f6", "#ef4444", "#22c55e", "#f59e0b", "#8b5cf6", "#7a90aa", "#000000"];
+  const COLORS = ["#3b82f6", "#1e40af", "#06b6d4", "#22c55e", "#84cc16", "#eab308", "#f59e0b", "#f97316", "#ef4444", "#ec4899", "#8b5cf6", "#7a90aa", "#000000", "#ffffff"];
 
   return (
     <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.85)", zIndex:2000, display:"flex", alignItems:"center", justifyContent:"center", padding:20 }}>
@@ -11114,12 +11115,16 @@ function PlanEditor({ onClose, onSaved, existingPlan, backgroundImg, sourcePlanI
           <div style={{ display:"flex", gap:4, marginLeft:8 }}>
             {COLORS.map(c=>(
               <button key={c} onClick={()=>setColor(c)}
-                style={{ width:24, height:24, borderRadius:"50%", background:c, border:color===c?"3px solid #fff":"1px solid #3d5270", cursor:"pointer", padding:0 }}/>
+                style={{ width:24, height:24, borderRadius:"50%", background:c, border:color===c?(c==="#ffffff"?"3px solid #3b82f6":"3px solid #fff"):"1px solid #3d5270", cursor:"pointer", padding:0 }}/>
             ))}
           </div>
           <div style={{ display:"flex", alignItems:"center", gap:6, marginLeft:8 }}>
             <span style={{ fontSize:11, color:"#7a90aa" }}>Epaisseur</span>
             <input type="range" min="1" max="8" value={strokeWidth} onChange={e=>setStrokeWidth(parseInt(e.target.value))} style={{ width:60 }}/>
+            <button onClick={()=>setFillShape(v=>!v)} title="Remplir les formes de couleur"
+              style={{ marginLeft:8, background:fillShape?"#1d4ed8":"#243352", color:fillShape?"#fff":"#94a3b8", border:"1px solid "+(fillShape?"#3b82f6":"#3d5270"), borderRadius:7, padding:"6px 12px", fontSize:11, fontWeight:600, cursor:"pointer", fontFamily:"inherit" }}>
+              Rempli
+            </button>
           </div>
           <div style={{ display:"flex", alignItems:"center", gap:8, marginLeft:8, paddingLeft:12, borderLeft:"1px solid #3d5270" }}>
             <button onClick={()=>setGridOn(v=>!v)} title="Afficher la grille et les reperes de case"
@@ -11194,20 +11199,20 @@ function PlanEditor({ onClose, onSaved, existingPlan, backgroundImg, sourcePlanI
               if (el.type === "rect") {
                 const x = Math.min(el.x1, el.x2), y = Math.min(el.y1, el.y2);
                 const w = Math.abs(el.x2-el.x1), h = Math.abs(el.y2-el.y1);
-                return <rect key={el.id} x={x} y={y} width={w} height={h} fill="none" stroke={el.color} strokeWidth={el.strokeWidth}
+                return <rect key={el.id} x={x} y={y} width={w} height={h} fill={(el.filled?el.color:"none")} stroke={el.color} strokeWidth={el.strokeWidth}
                   {...elHandlers(el)}
                   opacity={isSel?0.6:1}/>;
               }
               if (el.type === "cercle") {
                 const cx = (el.x1+el.x2)/2, cy = (el.y1+el.y2)/2;
                 const rx = Math.abs(el.x2-el.x1)/2, ry = Math.abs(el.y2-el.y1)/2;
-                return <ellipse key={el.id} cx={cx} cy={cy} rx={rx} ry={ry} fill="none" stroke={el.color} strokeWidth={el.strokeWidth}
+                return <ellipse key={el.id} cx={cx} cy={cy} rx={rx} ry={ry} fill={(el.filled?el.color:"none")} stroke={el.color} strokeWidth={el.strokeWidth}
                   {...elHandlers(el)}
                   opacity={isSel?0.6:1}/>;
               }
               if (el.type === "triangle") {
                 const x1=el.x1, y1=el.y2, x2=el.x2, y2=el.y2, x3=(el.x1+el.x2)/2, y3=el.y1;
-                return <polygon key={el.id} points={x1+","+y1+" "+x2+","+y2+" "+x3+","+y3} fill="none" stroke={el.color} strokeWidth={el.strokeWidth}
+                return <polygon key={el.id} points={x1+","+y1+" "+x2+","+y2+" "+x3+","+y3} fill={(el.filled?el.color:"none")} stroke={el.color} strokeWidth={el.strokeWidth}
                   {...elHandlers(el)}
                   opacity={isSel?0.6:1}/>;
               }
@@ -11226,7 +11231,7 @@ function PlanEditor({ onClose, onSaved, existingPlan, backgroundImg, sourcePlanI
               }
               if (el.type === "polygone") {
                 const pts = el.points.map(p=>p.x+","+p.y).join(" ");
-                return <polygon key={el.id} points={pts} fill="none" stroke={el.color} strokeWidth={el.strokeWidth}
+                return <polygon key={el.id} points={pts} fill={(el.filled?el.color:"none")} stroke={el.color} strokeWidth={el.strokeWidth}
                   {...elHandlers(el)}
                   opacity={isSel?0.6:1}/>;
               }
@@ -11246,7 +11251,7 @@ function PlanEditor({ onClose, onSaved, existingPlan, backgroundImg, sourcePlanI
                 const w = Math.abs(el.x2-el.x1) || 40, h = Math.abs(el.y2-el.y1) || 10;
                 return (
                   <g key={el.id} {...elHandlers(el)} opacity={isSel?0.6:1}>
-                    <rect x={x} y={y} width={w} height={h} fill="none" stroke={el.color} strokeWidth={el.strokeWidth}/>
+                    <rect x={x} y={y} width={w} height={h} fill={(el.filled?el.color:"none")} stroke={el.color} strokeWidth={el.strokeWidth}/>
                     <line x1={x} y1={y+h/2} x2={x+w} y2={y+h/2} stroke={el.color} strokeWidth={el.strokeWidth}/>
                   </g>
                 );
@@ -12415,13 +12420,13 @@ function PlanImplantation({ seuilsGlobaux }) {
                           {plan.backgroundImg && <image href={plan.backgroundImg} x="0" y="0" width="900" height="600" preserveAspectRatio="xMidYMid meet"/>}
                           {(plan.elements||[]).filter(el=>el.type!=="__grille").map(el=>{
                             if (el.type==="trait") return <line key={el.id} x1={el.x1} y1={el.y1} x2={el.x2} y2={el.y2} stroke={el.color} strokeWidth={el.strokeWidth} strokeLinecap="round"/>;
-                            if (el.type==="rect") { const x=Math.min(el.x1,el.x2),y=Math.min(el.y1,el.y2),w=Math.abs(el.x2-el.x1),h=Math.abs(el.y2-el.y1); return <rect key={el.id} x={x} y={y} width={w} height={h} fill="none" stroke={el.color} strokeWidth={el.strokeWidth}/>; }
-                            if (el.type==="cercle") { const cx=(el.x1+el.x2)/2,cy=(el.y1+el.y2)/2,rx=Math.abs(el.x2-el.x1)/2,ry=Math.abs(el.y2-el.y1)/2; return <ellipse key={el.id} cx={cx} cy={cy} rx={rx} ry={ry} fill="none" stroke={el.color} strokeWidth={el.strokeWidth}/>; }
-                            if (el.type==="triangle") { const x1=el.x1,y1=el.y2,x2=el.x2,y2=el.y2,x3=(el.x1+el.x2)/2,y3=el.y1; return <polygon key={el.id} points={x1+","+y1+" "+x2+","+y2+" "+x3+","+y3} fill="none" stroke={el.color} strokeWidth={el.strokeWidth}/>; }
+                            if (el.type==="rect") { const x=Math.min(el.x1,el.x2),y=Math.min(el.y1,el.y2),w=Math.abs(el.x2-el.x1),h=Math.abs(el.y2-el.y1); return <rect key={el.id} x={x} y={y} width={w} height={h} fill={(el.filled?el.color:"none")} stroke={el.color} strokeWidth={el.strokeWidth}/>; }
+                            if (el.type==="cercle") { const cx=(el.x1+el.x2)/2,cy=(el.y1+el.y2)/2,rx=Math.abs(el.x2-el.x1)/2,ry=Math.abs(el.y2-el.y1)/2; return <ellipse key={el.id} cx={cx} cy={cy} rx={rx} ry={ry} fill={(el.filled?el.color:"none")} stroke={el.color} strokeWidth={el.strokeWidth}/>; }
+                            if (el.type==="triangle") { const x1=el.x1,y1=el.y2,x2=el.x2,y2=el.y2,x3=(el.x1+el.x2)/2,y3=el.y1; return <polygon key={el.id} points={x1+","+y1+" "+x2+","+y2+" "+x3+","+y3} fill={(el.filled?el.color:"none")} stroke={el.color} strokeWidth={el.strokeWidth}/>; }
                             if (el.type==="fleche") { const angle=Math.atan2(el.y2-el.y1,el.x2-el.x1); const len=14; const ax1=el.x2-len*Math.cos(angle-Math.PI/6),ay1=el.y2-len*Math.sin(angle-Math.PI/6); const ax2=el.x2-len*Math.cos(angle+Math.PI/6),ay2=el.y2-len*Math.sin(angle+Math.PI/6); return (<g key={el.id}><line x1={el.x1} y1={el.y1} x2={el.x2} y2={el.y2} stroke={el.color} strokeWidth={el.strokeWidth} strokeLinecap="round"/><line x1={el.x2} y1={el.y2} x2={ax1} y2={ay1} stroke={el.color} strokeWidth={el.strokeWidth} strokeLinecap="round"/><line x1={el.x2} y1={el.y2} x2={ax2} y2={ay2} stroke={el.color} strokeWidth={el.strokeWidth} strokeLinecap="round"/></g>); }
-                            if (el.type==="polygone") { const pts2=(el.points||[]).map(p=>p.x+","+p.y).join(" "); return <polygon key={el.id} points={pts2} fill="none" stroke={el.color} strokeWidth={el.strokeWidth}/>; }
+                            if (el.type==="polygone") { const pts2=(el.points||[]).map(p=>p.x+","+p.y).join(" "); return <polygon key={el.id} points={pts2} fill={(el.filled?el.color:"none")} stroke={el.color} strokeWidth={el.strokeWidth}/>; }
                             if (el.type==="porte") { const x=Math.min(el.x1,el.x2),y=Math.min(el.y1,el.y2),w=Math.abs(el.x2-el.x1)||40; return (<g key={el.id}><line x1={x} y1={y} x2={x} y2={y+w} stroke={el.color} strokeWidth={el.strokeWidth}/><path d={"M "+x+" "+y+" A "+w+" "+w+" 0 0 1 "+(x+w)+" "+y} fill="none" stroke={el.color} strokeWidth="1" strokeDasharray="3,3"/><line x1={x} y1={y} x2={x+w} y2={y} stroke={el.color} strokeWidth={el.strokeWidth}/></g>); }
-                            if (el.type==="fenetre") { const x=Math.min(el.x1,el.x2),y=Math.min(el.y1,el.y2),w=Math.abs(el.x2-el.x1)||40,h=Math.abs(el.y2-el.y1)||10; return (<g key={el.id}><rect x={x} y={y} width={w} height={h} fill="none" stroke={el.color} strokeWidth={el.strokeWidth}/><line x1={x} y1={y+h/2} x2={x+w} y2={y+h/2} stroke={el.color} strokeWidth={el.strokeWidth}/></g>); }
+                            if (el.type==="fenetre") { const x=Math.min(el.x1,el.x2),y=Math.min(el.y1,el.y2),w=Math.abs(el.x2-el.x1)||40,h=Math.abs(el.y2-el.y1)||10; return (<g key={el.id}><rect x={x} y={y} width={w} height={h} fill={(el.filled?el.color:"none")} stroke={el.color} strokeWidth={el.strokeWidth}/><line x1={x} y1={y+h/2} x2={x+w} y2={y+h/2} stroke={el.color} strokeWidth={el.strokeWidth}/></g>); }
                             if (el.type==="texte") return renderTexteSVG(el, null);
                             return null;
                           })}
@@ -12458,13 +12463,13 @@ function PlanImplantation({ seuilsGlobaux }) {
                   {activePlanData.backgroundImg && <image href={activePlanData.backgroundImg} x="0" y="0" width="900" height="600" preserveAspectRatio="xMidYMid meet"/>}
                   {(activePlanData.elements||[]).filter(el=>el.type!=="__grille").map(el=>{
                     if (el.type==="trait") return <line key={el.id} x1={el.x1} y1={el.y1} x2={el.x2} y2={el.y2} stroke={el.color} strokeWidth={el.strokeWidth} strokeLinecap="round"/>;
-                    if (el.type==="rect") { const x=Math.min(el.x1,el.x2),y=Math.min(el.y1,el.y2),w=Math.abs(el.x2-el.x1),h=Math.abs(el.y2-el.y1); return <rect key={el.id} x={x} y={y} width={w} height={h} fill="none" stroke={el.color} strokeWidth={el.strokeWidth}/>; }
-                    if (el.type==="cercle") { const cx=(el.x1+el.x2)/2,cy=(el.y1+el.y2)/2,rx=Math.abs(el.x2-el.x1)/2,ry=Math.abs(el.y2-el.y1)/2; return <ellipse key={el.id} cx={cx} cy={cy} rx={rx} ry={ry} fill="none" stroke={el.color} strokeWidth={el.strokeWidth}/>; }
-                    if (el.type==="triangle") { const x1=el.x1,y1=el.y2,x2=el.x2,y2=el.y2,x3=(el.x1+el.x2)/2,y3=el.y1; return <polygon key={el.id} points={x1+","+y1+" "+x2+","+y2+" "+x3+","+y3} fill="none" stroke={el.color} strokeWidth={el.strokeWidth}/>; }
+                    if (el.type==="rect") { const x=Math.min(el.x1,el.x2),y=Math.min(el.y1,el.y2),w=Math.abs(el.x2-el.x1),h=Math.abs(el.y2-el.y1); return <rect key={el.id} x={x} y={y} width={w} height={h} fill={(el.filled?el.color:"none")} stroke={el.color} strokeWidth={el.strokeWidth}/>; }
+                    if (el.type==="cercle") { const cx=(el.x1+el.x2)/2,cy=(el.y1+el.y2)/2,rx=Math.abs(el.x2-el.x1)/2,ry=Math.abs(el.y2-el.y1)/2; return <ellipse key={el.id} cx={cx} cy={cy} rx={rx} ry={ry} fill={(el.filled?el.color:"none")} stroke={el.color} strokeWidth={el.strokeWidth}/>; }
+                    if (el.type==="triangle") { const x1=el.x1,y1=el.y2,x2=el.x2,y2=el.y2,x3=(el.x1+el.x2)/2,y3=el.y1; return <polygon key={el.id} points={x1+","+y1+" "+x2+","+y2+" "+x3+","+y3} fill={(el.filled?el.color:"none")} stroke={el.color} strokeWidth={el.strokeWidth}/>; }
                     if (el.type==="fleche") { const angle=Math.atan2(el.y2-el.y1,el.x2-el.x1); const len=14; const ax1=el.x2-len*Math.cos(angle-Math.PI/6),ay1=el.y2-len*Math.sin(angle-Math.PI/6); const ax2=el.x2-len*Math.cos(angle+Math.PI/6),ay2=el.y2-len*Math.sin(angle+Math.PI/6); return (<g key={el.id}><line x1={el.x1} y1={el.y1} x2={el.x2} y2={el.y2} stroke={el.color} strokeWidth={el.strokeWidth} strokeLinecap="round"/><line x1={el.x2} y1={el.y2} x2={ax1} y2={ay1} stroke={el.color} strokeWidth={el.strokeWidth} strokeLinecap="round"/><line x1={el.x2} y1={el.y2} x2={ax2} y2={ay2} stroke={el.color} strokeWidth={el.strokeWidth} strokeLinecap="round"/></g>); }
-                    if (el.type==="polygone") { const pts=(el.points||[]).map(p=>p.x+","+p.y).join(" "); return <polygon key={el.id} points={pts} fill="none" stroke={el.color} strokeWidth={el.strokeWidth}/>; }
+                    if (el.type==="polygone") { const pts=(el.points||[]).map(p=>p.x+","+p.y).join(" "); return <polygon key={el.id} points={pts} fill={(el.filled?el.color:"none")} stroke={el.color} strokeWidth={el.strokeWidth}/>; }
                     if (el.type==="porte") { const x=Math.min(el.x1,el.x2),y=Math.min(el.y1,el.y2),w=Math.abs(el.x2-el.x1)||40; return (<g key={el.id}><line x1={x} y1={y} x2={x} y2={y+w} stroke={el.color} strokeWidth={el.strokeWidth}/><path d={"M "+x+" "+y+" A "+w+" "+w+" 0 0 1 "+(x+w)+" "+y} fill="none" stroke={el.color} strokeWidth="1" strokeDasharray="3,3"/><line x1={x} y1={y} x2={x+w} y2={y} stroke={el.color} strokeWidth={el.strokeWidth}/></g>); }
-                    if (el.type==="fenetre") { const x=Math.min(el.x1,el.x2),y=Math.min(el.y1,el.y2),w=Math.abs(el.x2-el.x1)||40,h=Math.abs(el.y2-el.y1)||10; return (<g key={el.id}><rect x={x} y={y} width={w} height={h} fill="none" stroke={el.color} strokeWidth={el.strokeWidth}/><line x1={x} y1={y+h/2} x2={x+w} y2={y+h/2} stroke={el.color} strokeWidth={el.strokeWidth}/></g>); }
+                    if (el.type==="fenetre") { const x=Math.min(el.x1,el.x2),y=Math.min(el.y1,el.y2),w=Math.abs(el.x2-el.x1)||40,h=Math.abs(el.y2-el.y1)||10; return (<g key={el.id}><rect x={x} y={y} width={w} height={h} fill={(el.filled?el.color:"none")} stroke={el.color} strokeWidth={el.strokeWidth}/><line x1={x} y1={y+h/2} x2={x+w} y2={y+h/2} stroke={el.color} strokeWidth={el.strokeWidth}/></g>); }
                     if (el.type==="texte") return renderTexteSVG(el, null);
                     return null;
                   })}
@@ -12596,7 +12601,7 @@ function PlanImplantation({ seuilsGlobaux }) {
               <div key={cat} style={{ display:"flex", alignItems:"center", gap:10 }}>
                 <span style={{ fontSize:11, color:"#cbd5e1", width:180 }}>{lib}</span>
                 <div style={{ display:"flex", gap:3, marginRight:4 }}>
-                  {["#1e40af","#60a5fa","#3b82f6","#ef4444","#eab308","#22c55e","#8b5cf6","#f97316","#7a90aa"].map(c=>{
+                  {["#1e40af","#3b82f6","#60a5fa","#06b6d4","#22c55e","#84cc16","#eab308","#f59e0b","#f97316","#ef4444","#dc2626","#ec4899","#8b5cf6","#7c3aed","#7a90aa","#475569","#000000"].map(c=>{
                     var cle = cat==="RE"?"__RE":cat==="RI"?"__RI":cat;
                     var actifC = (nuisibleColors[cle]||"")===c;
                     return <button key={c} title="Couleur de ce type" onClick={()=>setNuisibleColor(cle,c)}
