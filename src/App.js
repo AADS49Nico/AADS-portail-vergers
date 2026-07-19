@@ -194,6 +194,7 @@ function filtreSite(table) {
 // On met a jour la globale + le localStorage, puis on notifie le shell qui
 // remonte la page active via sa key. Le remontage rejoue l effet de chargement.
 var __onSiteChange = null;
+var __onSitesListChange = null;
 function changerSite(id) {
   if (id === SITE_ACTIF) return;
   try { window.localStorage.setItem("aads_site_actif", id); } catch(_e) { return; }
@@ -341,6 +342,22 @@ function PuceForme({ forme, col, taille }) {
   if (forme === "rect") return <span style={{display:"inline-block",width:t*1.5,height:t*0.7,background:col,borderRadius:2}}/>;
   if (forme === "ovale") return <span style={{display:"inline-block",width:t*1.35,height:t*0.75,background:col,borderRadius:"50%"}}/>;
   return <span style={{display:"inline-block",width:t,height:t,background:col,borderRadius:"50%"}}/>;
+}
+
+// Transform SVG (rotation + miroir) d un element de plan, pour les vues hors editeur.
+function transformElGlobal(el) {
+  var cx, cy;
+  if (el.points && el.points.length) {
+    var sx=0, sy=0; el.points.forEach(function(pt){ sx+=pt.x; sy+=pt.y; });
+    cx=sx/el.points.length; cy=sy/el.points.length;
+  } else {
+    var ax=el.x1||0, bx=(el.x2!==undefined?el.x2:el.x1)||0, ay=el.y1||0, by=(el.y2!==undefined?el.y2:el.y1)||0;
+    cx=(ax+bx)/2; cy=(ay+by)/2;
+  }
+  var parts=[];
+  if (el.rotation) parts.push("rotate("+el.rotation+" "+cx+" "+cy+")");
+  if (el.flip) parts.push("translate("+(2*cx)+" 0) scale(-1 1)");
+  return parts.length ? parts.join(" ") : undefined;
 }
 
 function svgPastilleForme(forme, x, y, r, col, ns) {
@@ -11004,6 +11021,25 @@ function PlanEditor({ onClose, onSaved, existingPlan, backgroundImg, sourcePlanI
     return n;
   }
 
+  // Centre geometrique d un element, axe de rotation / miroir.
+  function centreEl(el) {
+    if (el.points && el.points.length) {
+      var sx=0, sy=0; el.points.forEach(pt=>{ sx+=pt.x; sy+=pt.y; });
+      return { cx: sx/el.points.length, cy: sy/el.points.length };
+    }
+    var ax = el.x1||0, bx = (el.x2!==undefined?el.x2:el.x1)||0;
+    var ay = el.y1||0, by = (el.y2!==undefined?el.y2:el.y1)||0;
+    return { cx: (ax+bx)/2, cy: (ay+by)/2 };
+  }
+  // Chaine transform SVG (rotation + miroir horizontal) autour du centre.
+  function transformEl(el) {
+    var c = centreEl(el);
+    var parts = [];
+    if (el.rotation) parts.push("rotate("+el.rotation+" "+c.cx+" "+c.cy+")");
+    if (el.flip) parts.push("translate("+(2*c.cx)+" 0) scale(-1 1)");
+    return parts.length ? parts.join(" ") : undefined;
+  }
+
   function finishPolygon() {
     if (!polyPoints || polyPoints.length < 3) { setPolyPoints(null); return; }
     const newEl = { id: String(Date.now()), type: "polygone", points: polyPoints, color, strokeWidth, filled: fillShape };
@@ -11075,6 +11111,7 @@ function PlanEditor({ onClose, onSaved, existingPlan, backgroundImg, sourcePlanI
   }
   function elHandlers(el) {
     return {
+      transform: transformEl(el),
       onMouseDown: (e) => { if (tool === "select") { e.stopPropagation(); amorcerDrag(el, e); } },
       onClick: () => { if (tool === "gomme") setElements(prev => prev.filter(e => e.id !== el.id)); else if (tool === "select") setSelectedEl(el.id); },
       onDoubleClick: () => { if (el.type === "texte" && tool === "select") { setEditingText(el.id); setTextInput(el.text || ""); setTxtBold(!!el.bold); setTxtItalic(!!el.italic); setTxtHighlight(!!el.highlight); } },
@@ -11117,7 +11154,7 @@ function PlanEditor({ onClose, onSaved, existingPlan, backgroundImg, sourcePlanI
 
         {/* Toolbar */}
         <div style={{ display:"flex", gap:8, marginBottom:12, flexWrap:"wrap", alignItems:"center" }}>
-          {[["trait","Trait"],["rect","Rectangle"],["cercle","Cercle"],["fleche","Fleche"],["triangle","Triangle"],["polygone","Polygone"],["porte","Porte"],["fenetre","Fenetre"],["texte","Texte"],["select","Selection"],["gomme","🧹 Gomme"]].map(([t,l])=>(
+          {[["trait","Trait"],["rect","Rectangle"],["cercle","Cercle"],["fleche","Fleche"],["triangle","Triangle"],["polygone","Polygone"],["porte","Porte"],["porte_biais","Porte biais"],["escalier","Escalier"],["fenetre","Fenetre"],["texte","Texte"],["select","Selection"],["gomme","🧹 Gomme"]].map(([t,l])=>(
             <button key={t} onClick={()=>{setTool(t);setPolyPoints(null);}}
               style={{ background:tool===t?"#1d4ed8":"#243352", color:tool===t?"#fff":"#94a3b8", border:"1px solid "+(tool===t?"#3b82f6":"#3d5270"), borderRadius:7, padding:"6px 12px", fontSize:11, fontWeight:600, cursor:"pointer", fontFamily:"inherit" }}>
               {l}
@@ -11272,6 +11309,26 @@ function PlanEditor({ onClose, onSaved, existingPlan, backgroundImg, sourcePlanI
                   </g>
                 );
               }
+              if (el.type === "escalier") {
+                const x = Math.min(el.x1,el.x2), y = Math.min(el.y1,el.y2);
+                const w = Math.abs(el.x2-el.x1)||60, h = Math.abs(el.y2-el.y1)||40;
+                const n = 4;
+                return (
+                  <g key={el.id} {...elHandlers(el)} opacity={isSel?0.6:1}>
+                    <rect x={x} y={y} width={w} height={h} fill={(el.filled?el.color:"none")} stroke={el.color} strokeWidth={el.strokeWidth}/>
+                    {Array.from({length:n-1}).map((_,i)=>(
+                      <line key={i} x1={x} y1={y+(i+1)*h/n} x2={x+w} y2={y+(i+1)*h/n} stroke={el.color} strokeWidth={el.strokeWidth}/>
+                    ))}
+                  </g>
+                );
+              }
+              if (el.type === "porte_biais") {
+                return (
+                  <g key={el.id} {...elHandlers(el)} opacity={isSel?0.6:1}>
+                    <line x1={el.x1} y1={el.y1} x2={el.x2} y2={el.y2} stroke={el.color} strokeWidth={el.strokeWidth} strokeLinecap="round"/>
+                  </g>
+                );
+              }
               if (el.type === "texte") {
                 return renderTexteSVG(el, { ...elHandlers(el), opacity: isSel ? 0.6 : 1 });
               }
@@ -11347,9 +11404,24 @@ function PlanEditor({ onClose, onSaved, existingPlan, backgroundImg, sourcePlanI
         {selectedEl && tool==="select" && (
           <div style={{ marginTop:10, display:"flex", justifyContent:"space-between", alignItems:"center", background:"#243352", borderRadius:8, padding:"8px 14px" }}>
             <span style={{ fontSize:12, color:"#94a3b8" }}>Element selectionne</span>
-            <button onClick={()=>deleteElement(selectedEl)} style={{ background:"#ef444422", color:"#ef4444", border:"1px solid #ef444444", borderRadius:6, padding:"4px 12px", fontSize:11, fontWeight:700, cursor:"pointer", fontFamily:"inherit" }}>
-              Supprimer cet element
-            </button>
+            <div style={{ display:"flex", gap:6, alignItems:"center", flexWrap:"wrap" }}>
+              {(()=>{ var pivote=(deg)=>setElements(prev=>prev.map(e=>e.id===selectedEl?{...e,rotation:(((e.rotation||0)+deg)%360+360)%360}:e));
+                return <>
+                  <button onClick={()=>pivote(-45)} title="Tourner a gauche 45" style={{ background:"#1a2540", color:"#94a3b8", border:"1px solid #3d5270", borderRadius:6, padding:"4px 9px", fontSize:12, cursor:"pointer", fontFamily:"inherit" }}>↺</button>
+                  <button onClick={()=>pivote(45)} title="Tourner a droite 45" style={{ background:"#1a2540", color:"#94a3b8", border:"1px solid #3d5270", borderRadius:6, padding:"4px 9px", fontSize:12, cursor:"pointer", fontFamily:"inherit" }}>↻</button>
+                  <button onClick={()=>pivote(90)} title="Quart de tour" style={{ background:"#1a2540", color:"#94a3b8", border:"1px solid #3d5270", borderRadius:6, padding:"4px 9px", fontSize:10, fontWeight:700, cursor:"pointer", fontFamily:"inherit" }}>90°</button>
+                </>;
+              })()}
+              <input type="range" min="0" max="359" title="Angle precis"
+                value={(elements.filter(e=>e.id===selectedEl)[0]||{}).rotation||0}
+                onChange={e=>{ var v=parseInt(e.target.value); setElements(prev=>prev.map(x=>x.id===selectedEl?{...x,rotation:v}:x)); }}
+                style={{ width:80 }}/>
+              <button onClick={()=>setElements(prev=>prev.map(e=>e.id===selectedEl?{...e,flip:!e.flip}:e))} title="Miroir / changer de sens"
+                style={{ background:"#1a2540", color:"#94a3b8", border:"1px solid #3d5270", borderRadius:6, padding:"4px 9px", fontSize:12, cursor:"pointer", fontFamily:"inherit" }}>⇄</button>
+              <button onClick={()=>deleteElement(selectedEl)} style={{ background:"#ef444422", color:"#ef4444", border:"1px solid #ef444444", borderRadius:6, padding:"4px 12px", fontSize:11, fontWeight:700, cursor:"pointer", fontFamily:"inherit" }}>
+                Supprimer
+              </button>
+            </div>
           </div>
         )}
 
@@ -12448,14 +12520,14 @@ function PlanImplantation({ seuilsGlobaux }) {
                       ? <svg viewBox="0 0 900 600" style={{width:"100%",display:"block",background:"#fff"}}>
                           {plan.backgroundImg && <image href={plan.backgroundImg} x="0" y="0" width="900" height="600" preserveAspectRatio="xMidYMid meet"/>}
                           {(plan.elements||[]).filter(el=>el.type!=="__grille").map(el=>{
-                            if (el.type==="trait") return <line key={el.id} x1={el.x1} y1={el.y1} x2={el.x2} y2={el.y2} stroke={el.color} strokeWidth={el.strokeWidth} strokeLinecap="round"/>;
-                            if (el.type==="rect") { const x=Math.min(el.x1,el.x2),y=Math.min(el.y1,el.y2),w=Math.abs(el.x2-el.x1),h=Math.abs(el.y2-el.y1); return <rect key={el.id} x={x} y={y} width={w} height={h} fill={(el.filled?el.color:"none")} stroke={el.color} strokeWidth={el.strokeWidth}/>; }
-                            if (el.type==="cercle") { const cx=(el.x1+el.x2)/2,cy=(el.y1+el.y2)/2,rx=Math.abs(el.x2-el.x1)/2,ry=Math.abs(el.y2-el.y1)/2; return <ellipse key={el.id} cx={cx} cy={cy} rx={rx} ry={ry} fill={(el.filled?el.color:"none")} stroke={el.color} strokeWidth={el.strokeWidth}/>; }
-                            if (el.type==="triangle") { const x1=el.x1,y1=el.y2,x2=el.x2,y2=el.y2,x3=(el.x1+el.x2)/2,y3=el.y1; return <polygon key={el.id} points={x1+","+y1+" "+x2+","+y2+" "+x3+","+y3} fill={(el.filled?el.color:"none")} stroke={el.color} strokeWidth={el.strokeWidth}/>; }
+                            if (el.type==="trait") return <line key={el.id} transform={transformElGlobal(el)} x1={el.x1} y1={el.y1} x2={el.x2} y2={el.y2} stroke={el.color} strokeWidth={el.strokeWidth} strokeLinecap="round"/>;
+                            if (el.type==="rect") { const x=Math.min(el.x1,el.x2),y=Math.min(el.y1,el.y2),w=Math.abs(el.x2-el.x1),h=Math.abs(el.y2-el.y1); return <rect key={el.id} transform={transformElGlobal(el)} x={x} y={y} width={w} height={h} fill={(el.filled?el.color:"none")} stroke={el.color} strokeWidth={el.strokeWidth}/>; }
+                            if (el.type==="cercle") { const cx=(el.x1+el.x2)/2,cy=(el.y1+el.y2)/2,rx=Math.abs(el.x2-el.x1)/2,ry=Math.abs(el.y2-el.y1)/2; return <ellipse key={el.id} transform={transformElGlobal(el)} cx={cx} cy={cy} rx={rx} ry={ry} fill={(el.filled?el.color:"none")} stroke={el.color} strokeWidth={el.strokeWidth}/>; }
+                            if (el.type==="triangle") { const x1=el.x1,y1=el.y2,x2=el.x2,y2=el.y2,x3=(el.x1+el.x2)/2,y3=el.y1; return <polygon key={el.id} transform={transformElGlobal(el)} points={x1+","+y1+" "+x2+","+y2+" "+x3+","+y3} fill={(el.filled?el.color:"none")} stroke={el.color} strokeWidth={el.strokeWidth}/>; }
                             if (el.type==="fleche") { const angle=Math.atan2(el.y2-el.y1,el.x2-el.x1); const len=14; const ax1=el.x2-len*Math.cos(angle-Math.PI/6),ay1=el.y2-len*Math.sin(angle-Math.PI/6); const ax2=el.x2-len*Math.cos(angle+Math.PI/6),ay2=el.y2-len*Math.sin(angle+Math.PI/6); return (<g key={el.id}><line x1={el.x1} y1={el.y1} x2={el.x2} y2={el.y2} stroke={el.color} strokeWidth={el.strokeWidth} strokeLinecap="round"/><line x1={el.x2} y1={el.y2} x2={ax1} y2={ay1} stroke={el.color} strokeWidth={el.strokeWidth} strokeLinecap="round"/><line x1={el.x2} y1={el.y2} x2={ax2} y2={ay2} stroke={el.color} strokeWidth={el.strokeWidth} strokeLinecap="round"/></g>); }
-                            if (el.type==="polygone") { const pts2=(el.points||[]).map(p=>p.x+","+p.y).join(" "); return <polygon key={el.id} points={pts2} fill={(el.filled?el.color:"none")} stroke={el.color} strokeWidth={el.strokeWidth}/>; }
-                            if (el.type==="porte") { const x=Math.min(el.x1,el.x2),y=Math.min(el.y1,el.y2),w=Math.abs(el.x2-el.x1)||40; return (<g key={el.id}><line x1={x} y1={y} x2={x} y2={y+w} stroke={el.color} strokeWidth={el.strokeWidth}/><path d={"M "+x+" "+y+" A "+w+" "+w+" 0 0 1 "+(x+w)+" "+y} fill="none" stroke={el.color} strokeWidth="1" strokeDasharray="3,3"/><line x1={x} y1={y} x2={x+w} y2={y} stroke={el.color} strokeWidth={el.strokeWidth}/></g>); }
-                            if (el.type==="fenetre") { const x=Math.min(el.x1,el.x2),y=Math.min(el.y1,el.y2),w=Math.abs(el.x2-el.x1)||40,h=Math.abs(el.y2-el.y1)||10; return (<g key={el.id}><rect x={x} y={y} width={w} height={h} fill={(el.filled?el.color:"none")} stroke={el.color} strokeWidth={el.strokeWidth}/><line x1={x} y1={y+h/2} x2={x+w} y2={y+h/2} stroke={el.color} strokeWidth={el.strokeWidth}/></g>); }
+                            if (el.type==="polygone") { const pts2=(el.points||[]).map(p=>p.x+","+p.y).join(" "); return <polygon key={el.id} transform={transformElGlobal(el)} points={pts2} fill={(el.filled?el.color:"none")} stroke={el.color} strokeWidth={el.strokeWidth}/>; }
+                            if (el.type==="porte") { const x=Math.min(el.x1,el.x2),y=Math.min(el.y1,el.y2),w=Math.abs(el.x2-el.x1)||40; return (<g key={el.id} transform={transformElGlobal(el)}><line x1={x} y1={y} x2={x} y2={y+w} stroke={el.color} strokeWidth={el.strokeWidth}/><path d={"M "+x+" "+y+" A "+w+" "+w+" 0 0 1 "+(x+w)+" "+y} fill="none" stroke={el.color} strokeWidth="1" strokeDasharray="3,3"/><line x1={x} y1={y} x2={x+w} y2={y} stroke={el.color} strokeWidth={el.strokeWidth}/></g>); }
+                            if (el.type==="fenetre") { const x=Math.min(el.x1,el.x2),y=Math.min(el.y1,el.y2),w=Math.abs(el.x2-el.x1)||40,h=Math.abs(el.y2-el.y1)||10; return (<g key={el.id} transform={transformElGlobal(el)}><rect x={x} y={y} width={w} height={h} fill={(el.filled?el.color:"none")} stroke={el.color} strokeWidth={el.strokeWidth}/><line x1={x} y1={y+h/2} x2={x+w} y2={y+h/2} stroke={el.color} strokeWidth={el.strokeWidth}/></g>); } if (el.type==="escalier") { const x=Math.min(el.x1,el.x2),y=Math.min(el.y1,el.y2),w=Math.abs(el.x2-el.x1)||60,h=Math.abs(el.y2-el.y1)||40; return (<g key={el.id} transform={transformElGlobal(el)}><rect x={x} y={y} width={w} height={h} fill={(el.filled?el.color:"none")} stroke={el.color} strokeWidth={el.strokeWidth}/>{[1,2,3].map(i=>(<line key={i} x1={x} y1={y+i*h/4} x2={x+w} y2={y+i*h/4} stroke={el.color} strokeWidth={el.strokeWidth}/>))}</g>); } if (el.type==="porte_biais") return <line key={el.id} transform={transformElGlobal(el)} x1={el.x1} y1={el.y1} x2={el.x2} y2={el.y2} stroke={el.color} strokeWidth={el.strokeWidth} strokeLinecap="round"/>;
                             if (el.type==="texte") return renderTexteSVG(el, null);
                             return null;
                           })}
@@ -12491,14 +12563,14 @@ function PlanImplantation({ seuilsGlobaux }) {
               ? <svg viewBox="0 0 900 600" style={{width:"100%",display:"block",background:"#fff"}}>
                   {activePlanData.backgroundImg && <image href={activePlanData.backgroundImg} x="0" y="0" width="900" height="600" preserveAspectRatio="xMidYMid meet"/>}
                   {(activePlanData.elements||[]).filter(el=>el.type!=="__grille").map(el=>{
-                    if (el.type==="trait") return <line key={el.id} x1={el.x1} y1={el.y1} x2={el.x2} y2={el.y2} stroke={el.color} strokeWidth={el.strokeWidth} strokeLinecap="round"/>;
-                    if (el.type==="rect") { const x=Math.min(el.x1,el.x2),y=Math.min(el.y1,el.y2),w=Math.abs(el.x2-el.x1),h=Math.abs(el.y2-el.y1); return <rect key={el.id} x={x} y={y} width={w} height={h} fill={(el.filled?el.color:"none")} stroke={el.color} strokeWidth={el.strokeWidth}/>; }
-                    if (el.type==="cercle") { const cx=(el.x1+el.x2)/2,cy=(el.y1+el.y2)/2,rx=Math.abs(el.x2-el.x1)/2,ry=Math.abs(el.y2-el.y1)/2; return <ellipse key={el.id} cx={cx} cy={cy} rx={rx} ry={ry} fill={(el.filled?el.color:"none")} stroke={el.color} strokeWidth={el.strokeWidth}/>; }
-                    if (el.type==="triangle") { const x1=el.x1,y1=el.y2,x2=el.x2,y2=el.y2,x3=(el.x1+el.x2)/2,y3=el.y1; return <polygon key={el.id} points={x1+","+y1+" "+x2+","+y2+" "+x3+","+y3} fill={(el.filled?el.color:"none")} stroke={el.color} strokeWidth={el.strokeWidth}/>; }
+                    if (el.type==="trait") return <line key={el.id} transform={transformElGlobal(el)} x1={el.x1} y1={el.y1} x2={el.x2} y2={el.y2} stroke={el.color} strokeWidth={el.strokeWidth} strokeLinecap="round"/>;
+                    if (el.type==="rect") { const x=Math.min(el.x1,el.x2),y=Math.min(el.y1,el.y2),w=Math.abs(el.x2-el.x1),h=Math.abs(el.y2-el.y1); return <rect key={el.id} transform={transformElGlobal(el)} x={x} y={y} width={w} height={h} fill={(el.filled?el.color:"none")} stroke={el.color} strokeWidth={el.strokeWidth}/>; }
+                    if (el.type==="cercle") { const cx=(el.x1+el.x2)/2,cy=(el.y1+el.y2)/2,rx=Math.abs(el.x2-el.x1)/2,ry=Math.abs(el.y2-el.y1)/2; return <ellipse key={el.id} transform={transformElGlobal(el)} cx={cx} cy={cy} rx={rx} ry={ry} fill={(el.filled?el.color:"none")} stroke={el.color} strokeWidth={el.strokeWidth}/>; }
+                    if (el.type==="triangle") { const x1=el.x1,y1=el.y2,x2=el.x2,y2=el.y2,x3=(el.x1+el.x2)/2,y3=el.y1; return <polygon key={el.id} transform={transformElGlobal(el)} points={x1+","+y1+" "+x2+","+y2+" "+x3+","+y3} fill={(el.filled?el.color:"none")} stroke={el.color} strokeWidth={el.strokeWidth}/>; }
                     if (el.type==="fleche") { const angle=Math.atan2(el.y2-el.y1,el.x2-el.x1); const len=14; const ax1=el.x2-len*Math.cos(angle-Math.PI/6),ay1=el.y2-len*Math.sin(angle-Math.PI/6); const ax2=el.x2-len*Math.cos(angle+Math.PI/6),ay2=el.y2-len*Math.sin(angle+Math.PI/6); return (<g key={el.id}><line x1={el.x1} y1={el.y1} x2={el.x2} y2={el.y2} stroke={el.color} strokeWidth={el.strokeWidth} strokeLinecap="round"/><line x1={el.x2} y1={el.y2} x2={ax1} y2={ay1} stroke={el.color} strokeWidth={el.strokeWidth} strokeLinecap="round"/><line x1={el.x2} y1={el.y2} x2={ax2} y2={ay2} stroke={el.color} strokeWidth={el.strokeWidth} strokeLinecap="round"/></g>); }
-                    if (el.type==="polygone") { const pts=(el.points||[]).map(p=>p.x+","+p.y).join(" "); return <polygon key={el.id} points={pts} fill={(el.filled?el.color:"none")} stroke={el.color} strokeWidth={el.strokeWidth}/>; }
-                    if (el.type==="porte") { const x=Math.min(el.x1,el.x2),y=Math.min(el.y1,el.y2),w=Math.abs(el.x2-el.x1)||40; return (<g key={el.id}><line x1={x} y1={y} x2={x} y2={y+w} stroke={el.color} strokeWidth={el.strokeWidth}/><path d={"M "+x+" "+y+" A "+w+" "+w+" 0 0 1 "+(x+w)+" "+y} fill="none" stroke={el.color} strokeWidth="1" strokeDasharray="3,3"/><line x1={x} y1={y} x2={x+w} y2={y} stroke={el.color} strokeWidth={el.strokeWidth}/></g>); }
-                    if (el.type==="fenetre") { const x=Math.min(el.x1,el.x2),y=Math.min(el.y1,el.y2),w=Math.abs(el.x2-el.x1)||40,h=Math.abs(el.y2-el.y1)||10; return (<g key={el.id}><rect x={x} y={y} width={w} height={h} fill={(el.filled?el.color:"none")} stroke={el.color} strokeWidth={el.strokeWidth}/><line x1={x} y1={y+h/2} x2={x+w} y2={y+h/2} stroke={el.color} strokeWidth={el.strokeWidth}/></g>); }
+                    if (el.type==="polygone") { const pts=(el.points||[]).map(p=>p.x+","+p.y).join(" "); return <polygon key={el.id} transform={transformElGlobal(el)} points={pts} fill={(el.filled?el.color:"none")} stroke={el.color} strokeWidth={el.strokeWidth}/>; }
+                    if (el.type==="porte") { const x=Math.min(el.x1,el.x2),y=Math.min(el.y1,el.y2),w=Math.abs(el.x2-el.x1)||40; return (<g key={el.id} transform={transformElGlobal(el)}><line x1={x} y1={y} x2={x} y2={y+w} stroke={el.color} strokeWidth={el.strokeWidth}/><path d={"M "+x+" "+y+" A "+w+" "+w+" 0 0 1 "+(x+w)+" "+y} fill="none" stroke={el.color} strokeWidth="1" strokeDasharray="3,3"/><line x1={x} y1={y} x2={x+w} y2={y} stroke={el.color} strokeWidth={el.strokeWidth}/></g>); }
+                    if (el.type==="fenetre") { const x=Math.min(el.x1,el.x2),y=Math.min(el.y1,el.y2),w=Math.abs(el.x2-el.x1)||40,h=Math.abs(el.y2-el.y1)||10; return (<g key={el.id} transform={transformElGlobal(el)}><rect x={x} y={y} width={w} height={h} fill={(el.filled?el.color:"none")} stroke={el.color} strokeWidth={el.strokeWidth}/><line x1={x} y1={y+h/2} x2={x+w} y2={y+h/2} stroke={el.color} strokeWidth={el.strokeWidth}/></g>); } if (el.type==="escalier") { const x=Math.min(el.x1,el.x2),y=Math.min(el.y1,el.y2),w=Math.abs(el.x2-el.x1)||60,h=Math.abs(el.y2-el.y1)||40; return (<g key={el.id} transform={transformElGlobal(el)}><rect x={x} y={y} width={w} height={h} fill={(el.filled?el.color:"none")} stroke={el.color} strokeWidth={el.strokeWidth}/>{[1,2,3].map(i=>(<line key={i} x1={x} y1={y+i*h/4} x2={x+w} y2={y+i*h/4} stroke={el.color} strokeWidth={el.strokeWidth}/>))}</g>); } if (el.type==="porte_biais") return <line key={el.id} transform={transformElGlobal(el)} x1={el.x1} y1={el.y1} x2={el.x2} y2={el.y2} stroke={el.color} strokeWidth={el.strokeWidth} strokeLinecap="round"/>;
                     if (el.type==="texte") return renderTexteSVG(el, null);
                     return null;
                   })}
@@ -13423,7 +13495,15 @@ function SitesTab() {
   const [msg, setMsg] = useState("");
 
   function recharger() {
-    sbFetch("config_client?order=id.asc", "GET").then(d => setSites(Array.isArray(d) ? d : []));
+    sbFetch("config_client?order=id.asc", "GET").then(d => {
+      var liste = Array.isArray(d) ? d : [];
+      setSites(liste);
+      // Synchroniser la globale lue par le selecteur de site en haut.
+      SITES_DISPO = liste.map(x => ({ id: x.id, site: x.site || x.id }));
+      // Rafraichir le selecteur en haut SANS remonter la page (contrairement a
+      // un changement de site, ici on ne recharge pas les donnees).
+      if (typeof __onSitesListChange === "function") __onSitesListChange();
+    });
   }
   useEffect(() => { recharger(); }, []);
 
@@ -13996,10 +14076,35 @@ function AppPortail({ isAdmin, onLogout }) {
   // Miroir React de SITE_ACTIF : sert de key a View pour la remonter a chaque
   // bascule, ce qui rejoue le chargement des donnees de la page.
   const [siteCourant, setSiteCourant] = useState(SITE_ACTIF);
+  const mainRef = React.useRef(null);
+  const scrollAvantSite = React.useRef(0);
+  const [, forceSitesRefresh] = useState(0);
   useEffect(() => {
-    __onSiteChange = (id) => setSiteCourant(id);
-    return () => { __onSiteChange = null; };
+    __onSiteChange = (id) => {
+      // On memorise la position de defilement avant que la page se remonte,
+      // pour ne pas ramener l utilisateur en haut a chaque changement de site.
+      scrollAvantSite.current = mainRef.current ? mainRef.current.scrollTop : 0;
+      setSiteCourant(id);
+    };
+    // Rafraichit juste le rendu (donc le selecteur de site) sans remonter la page.
+    __onSitesListChange = () => forceSitesRefresh(n => n + 1);
+    return () => { __onSiteChange = null; __onSitesListChange = null; };
   }, []);
+  // Apres remontage (donc apres rechargement des donnees), on restaure le scroll.
+  useEffect(() => {
+    if (!mainRef.current || !scrollAvantSite.current) return;
+    var cible = scrollAvantSite.current;
+    var essais = 0;
+    var timer = setInterval(() => {
+      if (!mainRef.current) { clearInterval(timer); return; }
+      mainRef.current.scrollTop = cible;
+      essais++;
+      // Le contenu se rallonge au fil du chargement asynchrone : on retente
+      // quelques fois jusqu a ce que la hauteur permette d atteindre la cible.
+      if (essais > 12 || mainRef.current.scrollTop >= cible - 2) clearInterval(timer);
+    }, 120);
+    return () => clearInterval(timer);
+  }, [siteCourant]);
 
   useEffect(() => {
     sbFetch("config_client?order=id.asc", "GET").then(data => {
@@ -14267,7 +14372,7 @@ function AppPortail({ isAdmin, onLogout }) {
         )}
 
         {/* MAIN */}
-        <main style={{ flex: 1, padding: "32px 36px", overflowY: "auto", position:"relative" }}>
+        <main ref={mainRef} style={{ flex: 1, padding: "32px 36px", overflowY: "auto", position:"relative" }}>
           {page !== "dashboard" && PAGES_AVEC_SITE.indexOf(page) >= 0 && (
             <div style={{ position:"absolute", top:12, left:0, right:0, zIndex:9, display:"flex", justifyContent:"center", pointerEvents:"none" }}>
               <div style={{ pointerEvents:"auto" }}><SiteSwitcher/></div>
