@@ -846,30 +846,21 @@ const PAGES_AVEC_SITE = ["dashboard","implantation","interventions","saisiepassa
 // de config_client (forceConfigUpdate s en charge).
 function SiteSwitcher({ compact }) {
   if (SITES_DISPO.length <= 1) return null;
-  const taille = compact ? 11 : 12;
-  // Retour a la ligne autorise : sur mobile les sites s empilent au lieu de
-  // deborder hors ecran (ce qui les rendait invisibles et non cliquables).
-  // Boutons dimensionnes pour etre attrapables au doigt (min 34px de haut).
+  // Menu deroulant natif du telephone : un seul champ ferme (le site actif),
+  // qui deroule la liste au clic. Compact, ne recouvre jamais le contenu.
   return (
-    <div style={{ display:"flex", flexWrap:"wrap", alignItems:"center", justifyContent:"center",
-      gap:5, background:"#243352", border:"1px solid #3d5270", borderRadius:10, padding:5,
-      maxWidth:"100%", boxSizing:"border-box" }}>
-      {SITES_DISPO.map(s => {
-        var actif = s.id === SITE_ACTIF;
-        return (
-          <button key={s.id} onClick={()=>{ if (!actif) changerSite(s.id); }}
-            title={actif ? "Site affiche" : "Basculer sur " + s.site}
-            style={{ background: actif ? "#1d4ed8" : "#1a2540",
-                     color: actif ? "#fff" : "#cbd5e1",
-                     border:"1px solid " + (actif ? "#3b82f6" : "#3d5270"),
-                     borderRadius:8, padding:"8px 14px", fontSize:taille, minHeight:34,
-                     fontWeight: actif ? 700 : 600, cursor: actif ? "default" : "pointer",
-                     fontFamily:"inherit", whiteSpace:"nowrap", touchAction:"manipulation" }}>
-            {s.site}
-          </button>
-        );
+    <select value={SITE_ACTIF}
+      onChange={function(e){ var id = e.target.value; if (id && id !== SITE_ACTIF) changerSite(id); }}
+      style={{ background:"#1d4ed8", color:"#fff", border:"1px solid #3b82f6",
+               borderRadius:9, padding:"9px 32px 9px 14px", fontSize:13, fontWeight:700,
+               fontFamily:"inherit", cursor:"pointer", minHeight:38, maxWidth:"70vw",
+               appearance:"none", WebkitAppearance:"none", MozAppearance:"none",
+               backgroundImage:"url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'><path d='M2 4l4 4 4-4' stroke='white' stroke-width='2' fill='none'/></svg>\")",
+               backgroundRepeat:"no-repeat", backgroundPosition:"right 12px center" }}>
+      {SITES_DISPO.map(function(s){
+        return <option key={s.id} value={s.id} style={{ background:"#243352", color:"#fff" }}>{s.site}</option>;
       })}
-    </div>
+    </select>
   );
 }
 
@@ -14431,22 +14422,22 @@ function AppPortail({ isAdmin, onLogout }) {
         )}
 
         {/* MAIN */}
-        <main ref={mainRef} style={{ flex: 1, padding: "32px 36px", overflowY: "auto", position:"relative" }}>
-          {page !== "dashboard" && PAGES_AVEC_SITE.indexOf(page) >= 0 && (
-            <div style={{ position:"absolute", top:12, left:8, right:52, zIndex:9, display:"flex", justifyContent:"center", pointerEvents:"none" }}>
-              <div style={{ pointerEvents:"auto", maxWidth:"100%" }}><SiteSwitcher/></div>
-            </div>
-          )}
-          <div style={{ position:"absolute", top:12, right:16, zIndex:10 }}>
+        <main ref={mainRef} style={{ flex: 1, padding: "12px 20px 32px", overflowY: "auto", position:"relative" }}>
+          {/* Barre superieure DANS le flux : pousse le contenu au lieu de le recouvrir.
+              Bouton menu a gauche, selecteur de site au centre, rafraichir a droite. */}
+          <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:16 }}>
+            <button onClick={()=>{setSidebarVisible(v=>{const next=!v;try{localStorage.setItem("aads_sidebar_visible",String(next));}catch(e){}return next;});}} title={sidebarVisible?"Masquer le menu":"Afficher le menu"}
+              style={{ flexShrink:0, background:"#243352", border:"1px solid #3d5270", borderRadius:7, color:"#94a3b8", fontSize:14, cursor:"pointer", padding:"7px 11px", lineHeight:1 }}>
+              {sidebarVisible ? "◀" : "▶"}
+            </button>
+            {page !== "dashboard" && PAGES_AVEC_SITE.indexOf(page) >= 0 && (
+              <div style={{ flexShrink:1, minWidth:0 }}><SiteSwitcher/></div>
+            )}
             <button onClick={()=>window.location.reload()} title="Rafraîchir les données"
-              style={{ background:"#243352", border:"1px solid #3d5270", borderRadius:7, color:"#7a90aa", fontSize:14, cursor:"pointer", padding:"4px 10px", lineHeight:1, fontWeight:700 }}>
+              style={{ flexShrink:0, marginLeft:"auto", background:"#243352", border:"1px solid #3d5270", borderRadius:7, color:"#7a90aa", fontSize:15, cursor:"pointer", padding:"7px 11px", lineHeight:1, fontWeight:700 }}>
               ↻
             </button>
           </div>
-          <button onClick={()=>{setSidebarVisible(v=>{const next=!v;try{localStorage.setItem("aads_sidebar_visible",String(next));}catch(e){}return next;});}} title={sidebarVisible?"Masquer le menu":"Afficher le menu"}
-            style={{ position:"absolute", top:8, left:8, zIndex:50, background:"#243352", border:"1px solid #3d5270", borderRadius:7, color:"#94a3b8", fontSize:14, cursor:"pointer", padding:"4px 9px", lineHeight:1 }}>
-            {sidebarVisible ? "◀" : "▶"}
-          </button>
           {!isAdmin && (
             <>
             <style>{`.aads-action-btn { opacity: 0.35 !important; pointer-events: none !important; cursor: not-allowed !important; }`}</style>
