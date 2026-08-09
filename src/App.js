@@ -172,12 +172,13 @@ let AADS_CONFIG = {
 // valeurs ci-dessous. Elles pointent vers Evelia UNIQUEMENT le temps de la
 // transition ; une fois les variables Vercel en place, ce repli est ignore.
 // ============================================================
-const ENV = (typeof process !== "undefined" && process.env) ? process.env : {};
-// SANS REPLI : la config vient UNIQUEMENT des variables d environnement Vercel.
-// Si elles sont absentes, le garde-fou "Portail non configure" s affiche.
-// C est le test qui prouve que les variables sont bien lues.
-const SUPABASE_URL = ENV.REACT_APP_SUPABASE_URL || "";
-const SUPABASE_KEY = ENV.REACT_APP_SUPABASE_KEY || "";
+// ============================================================
+// CONFIG VERGERS EN DUR (retour a l ancienne methode, le temps de resoudre
+// l uniformisation). URL deja remplie ; COLLE TA CLE anon de Vergers ci-dessous
+// entre les guillemets de SUPABASE_KEY (la longue chaine qui commence par eyJ).
+// ============================================================
+const SUPABASE_URL = "https://mqtydhsctxnbaarwxrvy.supabase.co";
+const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1xdHlkaHNjdHhuYmFhcnd4cnZ5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQyNzU1MTYsImV4cCI6MjA5OTg1MTUxNn0.N4TnW8zmjmy9A_eESlSrSlTn-ycriUs_FQTZdHGpWcQ";
 
 // ============================================================
 // MULTI-SITES
