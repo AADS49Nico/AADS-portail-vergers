@@ -139,12 +139,21 @@ const CLIENT_CONFIG = {
   nom: "",
   contrat: "",
   site: "",
+  adresse: "",
   type_site: "",
   date_debut: "",
   date_fin: "",
   passages_an: 12,
   seuil_vigilance: 5,
   seuil_critique: 10,
+};
+
+let PASTILLE_CONFIG = {
+  size: 22,
+  labelColor: "#ffffff",
+  labelSize: 7,
+  cercleSize: 2,
+  cercleColor: "#ffffff",
 };
 
 let AADS_CONFIG = {
@@ -172,11 +181,7 @@ let AADS_CONFIG = {
 // valeurs ci-dessous. Elles pointent vers Evelia UNIQUEMENT le temps de la
 // transition ; une fois les variables Vercel en place, ce repli est ignore.
 // ============================================================
-// ============================================================
-// CONFIG VERGERS EN DUR (retour a l ancienne methode, le temps de resoudre
-// l uniformisation). URL deja remplie ; COLLE TA CLE anon de Vergers ci-dessous
-// entre les guillemets de SUPABASE_KEY (la longue chaine qui commence par eyJ).
-// ============================================================
+// CONFIG LES VERGERS EN DUR (portail dedie, base propre).
 const SUPABASE_URL = "https://mqtydhsctxnbaarwxrvy.supabase.co";
 const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1xdHlkaHNjdHhuYmFhcnd4cnZ5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQyNzU1MTYsImV4cCI6MjA5OTg1MTUxNn0.N4TnW8zmjmy9A_eESlSrSlTn-ycriUs_FQTZdHGpWcQ";
 
@@ -195,6 +200,7 @@ const TABLES_PAR_SITE = ["postes","passages","plans","plans_dessines","plan_acti
 let SITE_ACTIF = ""; // reassigne par changerSite
 try { SITE_ACTIF = window.localStorage.getItem("aads_site_actif") || ""; } catch(_e) { SITE_ACTIF = ""; }
 let SITES_DISPO = [];
+let SITES_CONFIG = {};
 
 function tableParSite(table) { return TABLES_PAR_SITE.indexOf(String(table).split("?")[0]) !== -1; }
 // Si le site est inconnu, on renvoie un filtre impossible plutot que rien :
@@ -210,10 +216,37 @@ function filtreSite(table) {
 // remonte la page active via sa key. Le remontage rejoue l effet de chargement.
 var __onSiteChange = null;
 var __onSitesListChange = null;
+// Applique au CLIENT_CONFIG la config du site donne (contrat, adresse, seuils, contacts...).
+// Indispensable a la bascule : sinon le contrat resterait celui du site d ouverture et le
+// filtre des donnees (contrat + site) ne remonterait plus aucun poste sur un site a contrat different.
+function appliquerConfigSite(id) {
+  var cfg = SITES_CONFIG[id];
+  if (!cfg) return;
+  if (cfg.nom) CLIENT_CONFIG.nom = cfg.nom;
+  CLIENT_CONFIG.contrat = cfg.contrat || "";
+  CLIENT_CONFIG.site = cfg.site || id;
+  CLIENT_CONFIG.adresse = cfg.adresse || "";
+  CLIENT_CONFIG.type_site = cfg.type_site || "";
+  CLIENT_CONFIG.date_debut = cfg.date_debut || "";
+  CLIENT_CONFIG.date_fin = cfg.date_fin || "";
+  if (cfg.passages_an) CLIENT_CONFIG.passages_an = cfg.passages_an;
+  if (cfg.seuil_vigilance) CLIENT_CONFIG.seuil_vigilance = cfg.seuil_vigilance;
+  if (cfg.seuil_critique) CLIENT_CONFIG.seuil_critique = cfg.seuil_critique;
+  CLIENT_CONFIG.contact1_nom = cfg.contact1_nom || "";
+  CLIENT_CONFIG.contact1_titre = cfg.contact1_titre || "";
+  CLIENT_CONFIG.contact1_mail = cfg.contact1_mail || "";
+  CLIENT_CONFIG.contact1_tel = cfg.contact1_tel || "";
+  CLIENT_CONFIG.contact2_nom = cfg.contact2_nom || "";
+  CLIENT_CONFIG.contact2_titre = cfg.contact2_titre || "";
+  CLIENT_CONFIG.contact2_mail = cfg.contact2_mail || "";
+  CLIENT_CONFIG.contact2_tel = cfg.contact2_tel || "";
+  try { CLIENT_CONFIG.certifications = typeof cfg.certifications==="string" ? JSON.parse(cfg.certifications||"[]") : (cfg.certifications||[]); } catch(e) { CLIENT_CONFIG.certifications = []; }
+}
 function changerSite(id) {
   if (id === SITE_ACTIF) return;
   try { window.localStorage.setItem("aads_site_actif", id); } catch(_e) { return; }
   SITE_ACTIF = id;
+  appliquerConfigSite(id);
   if (typeof __onSiteChange === "function") __onSiteChange(id);
 }
 
@@ -286,11 +319,38 @@ async function sbDelete(table, id) {
   return sbFetch(table + "?id=eq." + id + "&contrat=eq." + CLIENT_CONFIG.contrat + filtreSite(table), "DELETE");
 }
 
+// Nettoie un nom de fichier pour le stockage Supabase : enleve les accents et
+// remplace tout caractere non alphanumerique (hors . _ -) par _. Sans ca, un nom
+// avec accent/espace/caractere special (ex: "Habilitation electrique.pdf") fait
+// echouer l upload avec une erreur 400 (cle de stockage invalide).
+function sanitizeFileName(name) {
+  return String(name || "fichier")
+    .normalize("NFD").replace(/[̀-ͯ]/g, "")   // enleve les accents
+    .replace(/[^a-zA-Z0-9._-]/g, "_")                    // remplace le reste par _
+    .replace(/_+/g, "_");                                // compacte les _ multiples
+}
+
+// Deduit la categorie 5M (Milieu / Matiere / Materiel / Methode / Main d'oeuvre)
+// a partir du texte d'une description. Priorite a la position "— X —" (format des
+// audits importes), puis recherche libre insensible aux accents. Defaut : Methode.
+function detect5M(txt) {
+  var s = " " + (txt || "") + " ";
+  var Ms = ["Milieu", "Matériel", "Matière", "Méthode", "Main d'oeuvre"];
+  for (var i = 0; i < Ms.length; i++) { if (s.indexOf("— " + Ms[i] + " —") >= 0) return Ms[i]; }
+  var l = s.toLowerCase();
+  if (l.indexOf("milieu") >= 0) return "Milieu";
+  if (l.indexOf("matériel") >= 0 || l.indexOf("materiel") >= 0) return "Matériel";
+  if (l.indexOf("matière") >= 0 || l.indexOf("matiere") >= 0) return "Matière";
+  if (l.indexOf("méthode") >= 0 || l.indexOf("methode") >= 0) return "Méthode";
+  if (l.indexOf("main d") >= 0 && l.indexOf("oeuvre") >= 0) return "Main d'oeuvre";
+  return "Méthode";
+}
+
 // Place ou deplace un poste sur un plan. Un poste ne peut etre que sur un seul plan a la fois
 // (contrainte unique en base sur contrat+poste_id). Si le poste existe deja ailleurs, on le
 // deplace (UPDATE plan_id+x+y) au lieu de tenter un INSERT qui echouerait en doublon.
-async function savePostePosition(planId, posteId, x, y) {
-  const posData = { id: planId+"_"+posteId, poste_id:posteId, plan_id:planId, x, y, contrat:CLIENT_CONFIG.contrat, site:SITE_ACTIF };
+async function savePostePosition(planId, posteId, x, y, page) {
+  const posData = { id: planId+"_"+posteId, poste_id:posteId, plan_id:planId, x, y, page: page||0, contrat:CLIENT_CONFIG.contrat, site:SITE_ACTIF };
 
   // Hors ligne — sauvegarder en attente
   if (!navigator.onLine) {
@@ -312,7 +372,7 @@ async function savePostePosition(planId, posteId, x, y) {
       Prefer: "return=representation",
     };
     const url = SUPABASE_URL + "/rest/v1/poste_positions?poste_id=eq." + encodeURIComponent(posteId) + "&contrat=eq." + CLIENT_CONFIG.contrat + filtreSite("poste_positions");
-    const res = await fetch(url, { method: "PATCH", headers, body: JSON.stringify({ id: planId + "_" + posteId, plan_id: planId, x, y }) });
+    const res = await fetch(url, { method: "PATCH", headers, body: JSON.stringify({ id: planId + "_" + posteId, plan_id: planId, x, y, page: page||0 }) });
     if (!res.ok) {
       const errText = await res.text().catch(() => "");
       console.error("Supabase error (deplacement poste):", res.status, errText);
@@ -398,8 +458,8 @@ function svgPastilleForme(forme, x, y, r, col, ns) {
     shape = document.createElementNS(ns, "circle");
     shape.setAttribute("cx", x); shape.setAttribute("cy", y); shape.setAttribute("r", r);
   }
-  shape.setAttribute("fill", col); shape.setAttribute("stroke", "#fff");
-  shape.setAttribute("stroke-width", 2); shape.setAttribute("stroke-linejoin", "round");
+  shape.setAttribute("fill", col); shape.setAttribute("stroke", PASTILLE_CONFIG.cercleColor);
+  shape.setAttribute("stroke-width", PASTILLE_CONFIG.cercleSize); shape.setAttribute("stroke-linejoin", "round");
   g.appendChild(shape);
   return g;
 }
@@ -420,7 +480,7 @@ function canvasPastilleForme(ctx, forme, x, y, r, col) {
     ctx.arc(x, y, r, 0, Math.PI*2);
   }
   ctx.fillStyle = col; ctx.fill();
-  ctx.strokeStyle = "#fff"; ctx.lineWidth = 2; ctx.lineJoin = "round"; ctx.stroke();
+  ctx.strokeStyle = PASTILLE_CONFIG.cercleColor; ctx.lineWidth = PASTILLE_CONFIG.cercleSize; ctx.lineJoin = "round"; ctx.stroke();
 }
 const NUISIBLE_COLORS = {
   Rongeurs: "#3b82f6",
@@ -725,10 +785,82 @@ export function estConsoPartielle(v) {
 export function estConsoQuelconque(v) {
   return estConsoTotale(v) || estConsoPartielle(v);
 }
+// Couleur d une consommation d appat selon les seuils configures (meme logique
+// que le plan) : vert si aucune conso, orange a partir du seuil orange, rouge a
+// partir du seuil rouge. Renvoie null si la valeur n est pas une consommation.
+export function couleurConsoParSeuil(etat, seuils) {
+  const consoOrange = (seuils && seuils.rongeurs && seuils.rongeurs.conso_orange) || "25%";
+  const consoRouge  = (seuils && seuils.rongeurs && seuils.rongeurs.conso_rouge)  || "75%";
+  function idx(n) {
+    if (estConsoTotale(n)) return 4;
+    if (n === "75%") return 3;
+    if (n === "50%") return 2;
+    if (n === "25%" || n === "CONSOMMATION PARTIELLE") return 1;
+    return 0;
+  }
+  const e = idx(etat);
+  if (e <= 0) return null;
+  if (e >= idx(consoRouge)) return "#ef4444";
+  if (e >= idx(consoOrange)) return "#f59e0b";
+  return "#22c55e";
+}
+// Classification exterieur/interieur d un poste : la colonne type (RE/RI) fait foi ;
+// a defaut seulement (ancien poste sans type), on retombe sur la regex de l identifiant.
+function posteEstExt(p) {
+  var t = (p && p.type) || "";
+  if (t === "RE") return true;
+  if (t === "RI") return false;
+  return /^RE/i.test((p && p.id) || "");
+}
+function posteEstInt(p) {
+  var t = (p && p.type) || "";
+  if (t === "RI") return true;
+  if (t === "RE") return false;
+  var id = (p && p.id) || "";
+  return /^(RI|R\d|S\d)/i.test(id) && !/^RE/i.test(id);
+}
+// Liste (texte) des molecules toxiques utilisees sur un ensemble de postes,
+// d apres les passages (champ molecule des saisies) et molecule_actuelle.
+function moleculesToxiquesTexte(passages, postesRongeurs) {
+  var ids = {}; (postesRongeurs||[]).forEach(function(p){ ids[p.id] = 1; });
+  var set = {};
+  (passages||[]).forEach(function(pa){
+    if (pa.type === "Insectes volants") return;
+    var s = typeof pa.saisies === "string" ? (function(){ try { return JSON.parse(pa.saisies||"{}"); } catch(e){ return {}; } })() : (pa.saisies||{});
+    Object.keys(s).forEach(function(id){ if(!ids[id]) return; var m = s[id] && s[id].molecule; if(m && m!=="Placebo" && m!=="Non toxique") set[m] = 1; });
+  });
+  (postesRongeurs||[]).forEach(function(p){ if(p.molecule_actuelle && p.molecule_actuelle!=="Placebo") set[p.molecule_actuelle] = 1; });
+  var arr = Object.keys(set);
+  return arr.length ? arr.join(", ") : "";
+}
 
 // Couleur d un poste selon son type et ses seuils (meme logique que les pastilles
 // du plan) : "rouge" (seuil critique), "orange" (seuil vigilance) ou "vert".
 // s = saisie du poste, p = poste (pour connaitre le nuisible), seuils = seuils globaux.
+// --- Seuils DEIV par GROUPES nommes ---------------------------------------
+// seuils.deivGroupes = [{ id, nom, deivs:[posteId...], total:{leger,moyen}, cats:{cat:{leger,moyen}} }]
+// Un DEIV d un groupe utilise les seuils du groupe (par categorie + total) ; sinon repli sur seuils.iv.
+function groupeDeivPour(poste, seuils) {
+  const gs = (seuils && seuils.deivGroupes) || [];
+  if (!poste) return null;
+  for (var i=0;i<gs.length;i++){ if (gs[i] && Array.isArray(gs[i].deivs) && gs[i].deivs.indexOf(poste.id)>=0) return gs[i]; }
+  return null;
+}
+function niveauDeiv(s, poste, seuils) {
+  const CATS = ["Moucherons","Mouches","Moustiques","Hyménoptères","Lépidoptères","Coléoptères","Punaises","Tipules"];
+  const g = groupeDeivPour(poste, seuils);
+  const cats = (g && g.cats) || (seuils && seuils.iv) || {};
+  var max = 0, tot = 0;
+  CATS.forEach(function(cat){
+    const v = parseInt((s && s["iv_"+cat])||0); tot += v;
+    const sv = cats[cat] || {leger:999,moyen:9999};
+    if (v>=sv.moyen) max = Math.max(max,2); else if (v>=sv.leger) max = Math.max(max,1);
+  });
+  if (g && g.total && (g.total.leger || g.total.moyen)) {
+    if (tot>=g.total.moyen) max = Math.max(max,2); else if (tot>=g.total.leger) max = Math.max(max,1);
+  }
+  return max;
+}
 export function couleurSeuilPoste(p, s, seuils) {
   if (!p || !s || !seuils) return "vert";
   const CATS_IV = ["Moucherons","Mouches","Moustiques","Hyménoptères","Lépidoptères","Coléoptères","Punaises","Tipules"];
@@ -765,12 +897,7 @@ export function couleurSeuilPoste(p, s, seuils) {
   if (nuisible === "Teignes") { const v=parseInt(s.etat||0); const t=seuils.teignes||{}; return v>=t.moyen?"rouge":v>=t.leger?"orange":"vert"; }
   if (nuisible === "IPS")     { const v=parseInt(s.etat||0); const i=seuils.ips||{};     return v>=i.moyen?"rouge":v>=i.leger?"orange":"vert"; }
   if (nuisible === "Insectes volants") {
-    let max = 0;
-    CATS_IV.forEach(function(cat){
-      const v = parseInt(s["iv_"+cat]||0);
-      const sv = (seuils.iv||{})[cat] || {leger:999,moyen:9999};
-      if (v>=sv.moyen) max = Math.max(max,2); else if (v>=sv.leger) max = Math.max(max,1);
-    });
+    const max = niveauDeiv(s, p, seuils);   // groupe DEIV (par categorie + total) ou repli global
     return max===2?"rouge":max===1?"orange":"vert";
   }
   return "vert";
@@ -962,7 +1089,7 @@ function Dashboard({ onNav, reinterventions, onLogoClick, onParamsClick, passage
       }).catch(()=>{});
     }
     sbGet("postes").then(data => {
-      if (data && data.length > 0) { setPostesTotal(data.length); setPostesListe(data); }
+      if (data && data.length > 0) { var actifs = data.filter(function(p){ return p.statut !== "Désactivé"; }); setPostesTotal(actifs.length); setPostesListe(actifs); }
     }).catch(()=>{});
     sbGet("maintenance_deiv_interventions").then(data => {
       if (data && data.length > 0) setNbMaintenancesDeiv(data.length);
@@ -1094,7 +1221,7 @@ function Dashboard({ onNav, reinterventions, onLogoClick, onParamsClick, passage
           <SiteSwitcher/>
         </div>
         <div style={{ fontSize: 13, color: "#7a90aa", display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
-          <span>{CLIENT_CONFIG.type_site} - Contrat N {CLIENT_CONFIG.contrat}</span>
+          <span>{CLIENT_CONFIG.type_site}</span>
           {(CLIENT_CONFIG.certifications||[]).map(c=>(
             <span key={c} style={{ fontSize:10, fontWeight:700, background:"#1d4ed822", color:"#3b82f6", border:"1px solid #3b82f644", borderRadius:10, padding:"2px 9px" }}>{c}</span>
           ))}
@@ -1803,6 +1930,11 @@ function Cartographie({ seuilsGlobaux }) {
   function sortPostesNat(list) {
     const TYPE_ORDER = { "RE": 0, "RI": 1 };
     return list.slice().sort((a,b)=>{
+      const oa = (a.ordre===undefined||a.ordre===null||a.ordre==="") ? null : Number(a.ordre);
+      const ob = (b.ordre===undefined||b.ordre===null||b.ordre==="") ? null : Number(b.ordre);
+      if (oa!==null && ob!==null) { if (oa!==ob) return oa - ob; }
+      else if (oa!==null) return -1;
+      else if (ob!==null) return 1;
       const ta = TYPE_ORDER[a.type] !== undefined ? TYPE_ORDER[a.type] : 99;
       const tb = TYPE_ORDER[b.type] !== undefined ? TYPE_ORDER[b.type] : 99;
       if (ta !== tb) return ta - tb;
@@ -1889,9 +2021,22 @@ function Cartographie({ seuilsGlobaux }) {
       const s = seuilsDyn[nuisible];
       return s ? (num >= s.critique ? "#ef4444" : num >= s.vigilance ? "#f59e0b" : "#22c55e") : "#22c55e";
     }
-    if (estConsoTotale(v)) return "#ef4444";
-    if (v === "CONSOMMATION PARTIELLE") return "#f59e0b";
-    if (v === "75%" || v === "50%" || v === "25%") return "#f59e0b";
+    // Consommation rongeurs : on colore selon le POURCENTAGE REEL (p.infos),
+    // car p.passages[d] a perdu le % ("CONSOMMATION PARTIELLE"). La couleur
+    // suit alors les seuils, exactement comme le plan.
+    const info = (p.infos||{})[d];
+    if (info && info.type) {
+      const etatReel = info.type==="totale" ? "100%"
+                     : info.type==="partielle" ? (info.valeur || "CONSOMMATION PARTIELLE")
+                     : "";
+      const cc = couleurConsoParSeuil(etatReel, seuilsGlobaux);
+      if (cc) return cc;
+      if (info.type === "cap") return "#f59e0b";
+      if (info.type === "num" && parseFloat(info.valeur) > 0) return "#f59e0b";
+      return "#22c55e";
+    }
+    const cc2 = couleurConsoParSeuil(v, seuilsGlobaux);
+    if (cc2) return cc2;
     if (v && !isNaN(parseFloat(v)) && parseFloat(v) > 0) return "#f59e0b";
     return "#22c55e";
   }
@@ -2072,7 +2217,9 @@ function Cartographie({ seuilsGlobaux }) {
               const appat = (displaySel.appat || "").toLowerCase();
               const nuisible = (displaySel.nuisible || "Rongeurs");
               const isPlaceboToxique = appat === "placebo" || appat === "toxique";
-              const isGlueRongeur = (appat === "glue") && nuisible === "Rongeurs";
+              // Tout dispositif de capture (glu, mecanique, multicapture, electrique, grille...)
+              // ouvre la saisie en NOMBRE DE CAPTURES. Placebo/Toxique restent en consommation.
+              const isGlueRongeur = nuisible === "Rongeurs" && appat !== "" && !isPlaceboToxique;
               const c = estConsoTotale(val) ? "#ef4444" : estConsoPartielle(val) ? "#f59e0b" : "#22c55e";
               return (
                 <div key={d} style={{ background: "#1a2540", borderRadius: 8, padding: "8px 12px", borderLeft: "3px solid " + c, marginBottom: 6 }} onClick={e => e.stopPropagation()}>
@@ -2889,7 +3036,9 @@ function Conformite() {
     const dateFmt = draft.date && draft.date.includes("-") ? draft.date.split("-").reverse().join("/") : draft.date;
     const updated = {...draft, date: dateFmt};
     setCriteres(prev => prev.map(c => c.ref === editing ? updated : c));
-    sbUpdate("conformite_ifs", editing, { libelle:updated.libelle, statut:updated.statut, date:updated.date||"" });
+    // Upsert (cree ou met a jour) : plus robuste qu un PATCH si la ligne n existe
+    // pas encore pour ce site.
+    sbUpsert("conformite_ifs", { id: editing, contrat: CLIENT_CONFIG.contrat, ref: updated.ref||editing, libelle:updated.libelle, statut:updated.statut, date:updated.date||"" });
     setEditing(null);
   }
   function deleteCritere(ref) {
@@ -3690,6 +3839,8 @@ function StatutGraph({ passagesFiltres }) {
 
 function TauxActiviteChart({ passages, postes }) {
   const [typeFilter, setTypeFilter] = usePersistedValue("TauxActivite_typeFilter", "tous"); // tous | RE | RI
+  const [macroFilter, setMacroFilter] = usePersistedValue("TauxActivite_macroFilter", "Toutes"); // zone macro, cumulable avec le type
+  const [produitNuFilter, setProduitNuFilter] = usePersistedValue("TauxActivite_produitNuFilter", "tous"); // tous | oui | non
   const [filterAnnee, setFilterAnnee] = usePersistedValue("TauxActivite_filterAnnee", anneeDefaut(passages));
   const [selectedAnnees, setSelectedAnnees] = usePersistedValue("TauxActivite_selectedAnnees", []);
   const [filterTrimestre, setFilterTrimestre] = usePersistedValue("TauxActivite_filterTrimestre", "Tous");
@@ -3716,7 +3867,8 @@ function TauxActiviteChart({ passages, postes }) {
   const pd = d => { if(!d) return new Date(0); const p=(d||"").split("/"); return p.length===3?new Date(p[2]+"-"+p[1]+"-"+p[0]):new Date(d); };
   const MOIS_LABELS = ["Jan.","Fév","Mar","Avr","Mai","Jun","Jul","Aoû","Sep","Oct","Nov","Dec"];
 
-  const postesRongeurs = postes.filter(p => (p.nuisible||"Rongeurs") === "Rongeurs" && (typeFilter==="tous" || p.type===typeFilter));
+  const postesRongeurs = postes.filter(p => (p.nuisible||"Rongeurs") === "Rongeurs" && (typeFilter==="tous" || p.type===typeFilter) && (macroFilter==="Toutes" || (p.macro||"")===macroFilter) && (produitNuFilter==="tous" || (produitNuFilter==="oui" ? !!p.produit_nu : !p.produit_nu)));
+  const macrosDispo = ["Toutes", ...Array.from(new Set(postes.filter(p=>(p.nuisible||"Rongeurs")==="Rongeurs").map(p=>p.macro).filter(Boolean)))];
 
   const annees = [...new Set(passages.filter(p=>p.type!=="Insectes volants").map(p=>{ const d=pd(p.date); return d&&!isNaN(d)?d.getFullYear():null; }).filter(Boolean))].sort((a,b)=>a-b);
 
@@ -3826,13 +3978,15 @@ function TauxActiviteChart({ passages, postes }) {
     const svgTaux = "<svg width='"+W2+"' height='"+H2+"' xmlns='http://www.w3.org/2000/svg' style='background:#f9fafb;border-radius:8px;border:1px solid #e5e7eb'>"+seuilsSvg+moisSvg+seriesSvg+legendeSvg+"</svg>";
 
     const typeLabel = typeFilter==="RE"?"Rongeurs exterieurs":typeFilter==="RI"?"Rongeurs interieurs":"Tous rongeurs";
+    const macroLabel = (macroFilter && macroFilter!=="Toutes") ? " - Zone macro : "+macroFilter : "";
+    const molTox = moleculesToxiquesTexte(passages, postesRongeurs);
     const rows = statsParAnnee.map(function(sa){
       return sa.stats.map(function(x){ return "<tr><td>"+MOIS_LABELS[x.mois]+" "+sa.annee+"</td><td style='font-weight:700'>"+x.tauxActivite+"%</td><td>"+x.actifs+"/"+x.total+"</td></tr>"; }).join("");
     }).join("");
 
     exportHTML("Taux activite rongeurs - "+CLIENT_CONFIG.nom,
-      "<h1>Taux d'activité - "+typeLabel+"</h1>"+
-      "<p style='color:#6b7280;margin-bottom:16px'>"+CLIENT_CONFIG.nom+" - "+new Date().toLocaleDateString("fr-FR")+"</p>"+
+      "<h1>Taux d'activité - "+typeLabel+macroLabel+"</h1>"+
+      "<p style='color:#6b7280;margin-bottom:16px'>"+CLIENT_CONFIG.nom+" - "+new Date().toLocaleDateString("fr-FR")+(molTox?" &middot; Molécules toxiques : "+molTox:"")+"</p>"+
       svgTaux+
       "<table style='width:100%;border-collapse:collapse;margin-top:16px'><thead><tr><th>Mois</th><th>Taux</th><th>Postes actifs</th></tr></thead><tbody>"+rows+"</tbody></table>"
     );
@@ -3864,6 +4018,13 @@ function TauxActiviteChart({ passages, postes }) {
                     </button>
                   ))}
                 </div>
+              </div>
+              <div>
+                <label style={{fontSize:9,color:"#7a90aa",display:"block",marginBottom:3}}>Zone macro</label>
+                <select value={produitNuFilter} onChange={e=>setProduitNuFilter(e.target.value)} style={inpStyle}><option value="tous">Produit nu : tous</option><option value="oui">En zone produit nu</option><option value="non">Hors produit nu</option></select>
+        <select value={macroFilter} onChange={e=>setMacroFilter(e.target.value)} style={inpStyle}>
+                  {macrosDispo.map(m=><option key={m} value={m}>{m}</option>)}
+                </select>
               </div>
               <div>
                 <label style={{fontSize:9,color:"#7a90aa",display:"block",marginBottom:3}}>Annee(s)</label>
@@ -3905,7 +4066,7 @@ function TauxActiviteChart({ passages, postes }) {
                 style={{background:showSeuils?"#243352":"transparent",color:showSeuils?"#f1f5f9":"#7a90aa",border:"1px solid "+(showSeuils?"#5a7090":"#3d5270"),borderRadius:7,padding:"6px 12px",fontSize:11,fontWeight:600,cursor:"pointer",fontFamily:"inherit"}}>
                 {showSeuils?"Masquer":"Afficher"} seuils
               </button>
-              <button onClick={()=>{setTypeFilter("tous");setFilterAnnee("Toutes");setSelectedAnnees([]);setFilterTrimestre("Tous");setFilterMois("Tous");setShowSeuils(true);setEchelle("auto");}}
+              <button onClick={()=>{setTypeFilter("tous");setMacroFilter("Toutes");setFilterAnnee("Toutes");setSelectedAnnees([]);setFilterTrimestre("Tous");setFilterMois("Tous");setShowSeuils(true);setEchelle("auto");}}
                 style={{background:"transparent",color:"#7a90aa",border:"1px solid #3d5270",borderRadius:7,padding:"6px 12px",fontSize:11,cursor:"pointer",fontFamily:"inherit"}}>
                 Reset
               </button>
@@ -3982,6 +4143,13 @@ function TauxActiviteChart({ passages, postes }) {
           </div>
         </div>
         <div>
+          <label style={{fontSize:9,color:"#7a90aa",display:"block",marginBottom:3}}>Zone macro</label>
+          <select value={produitNuFilter} onChange={e=>setProduitNuFilter(e.target.value)} style={inpStyle}><option value="tous">Produit nu : tous</option><option value="oui">En zone produit nu</option><option value="non">Hors produit nu</option></select>
+        <select value={macroFilter} onChange={e=>setMacroFilter(e.target.value)} style={inpStyle}>
+            {macrosDispo.map(m=><option key={m} value={m}>{m}</option>)}
+          </select>
+        </div>
+        <div>
           <label style={{fontSize:9,color:"#7a90aa",display:"block",marginBottom:3}}>Annee(s)</label>
           <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
             {annees.map(a=>{
@@ -4021,7 +4189,7 @@ function TauxActiviteChart({ passages, postes }) {
           style={{background:showSeuils?"#243352":"transparent",color:showSeuils?"#f1f5f9":"#7a90aa",border:"1px solid "+(showSeuils?"#5a7090":"#3d5270"),borderRadius:7,padding:"6px 12px",fontSize:11,fontWeight:600,cursor:"pointer",fontFamily:"inherit"}}>
           {showSeuils?"Masquer":"Afficher"} seuils
         </button>
-        <button onClick={()=>{setTypeFilter("tous");setFilterAnnee("Toutes");setSelectedAnnees([]);setFilterTrimestre("Tous");setFilterMois("Tous");setShowSeuils(true);setEchelle("auto");}}
+        <button onClick={()=>{setTypeFilter("tous");setMacroFilter("Toutes");setFilterAnnee("Toutes");setSelectedAnnees([]);setFilterTrimestre("Tous");setFilterMois("Tous");setShowSeuils(true);setEchelle("auto");}}
           style={{background:"transparent",color:"#7a90aa",border:"1px solid #3d5270",borderRadius:7,padding:"6px 12px",fontSize:11,cursor:"pointer",fontFamily:"inherit"}}>
           Reset
         </button>
@@ -4077,6 +4245,8 @@ function TauxActiviteChart({ passages, postes }) {
 
 function CapturesChart({ passages, postes }) {
   const [typeFilter, setTypeFilter] = usePersistedValue("Captures_typeFilter", "tous"); // tous | RE | RI
+  const [macroFilter, setMacroFilter] = usePersistedValue("Captures_macroFilter", "Toutes"); // zone macro, cumulable avec le type
+  const [produitNuFilter, setProduitNuFilter] = usePersistedValue("Captures_produitNuFilter", "tous"); // tous | oui | non
   const [filterAnnee, setFilterAnnee] = usePersistedValue("Captures_filterAnnee", anneeDefaut(passages));
   const [selectedAnnees, setSelectedAnnees] = usePersistedValue("Captures_selectedAnnees", []);
   const [filterTrimestre, setFilterTrimestre] = usePersistedValue("Captures_filterTrimestre", "Tous");
@@ -4089,7 +4259,8 @@ function CapturesChart({ passages, postes }) {
   const pd = d => { if(!d) return new Date(0); const p=(d||"").split("/"); return p.length===3?new Date(p[2]+"-"+p[1]+"-"+p[0]):new Date(d); };
   const MOIS_LABELS = ["Jan.","Fév","Mar","Avr","Mai","Jun","Jul","Aoû","Sep","Oct","Nov","Dec"];
 
-  const postesRongeurs = postes.filter(p => (p.nuisible||"Rongeurs") === "Rongeurs" && (typeFilter==="tous" || p.type===typeFilter));
+  const postesRongeurs = postes.filter(p => (p.nuisible||"Rongeurs") === "Rongeurs" && (typeFilter==="tous" || p.type===typeFilter) && (macroFilter==="Toutes" || (p.macro||"")===macroFilter) && (produitNuFilter==="tous" || (produitNuFilter==="oui" ? !!p.produit_nu : !p.produit_nu)));
+  const macrosDispo = ["Toutes", ...Array.from(new Set(postes.filter(p=>(p.nuisible||"Rongeurs")==="Rongeurs").map(p=>p.macro).filter(Boolean)))];
 
   const annees = [...new Set(passages.filter(p=>p.type!=="Insectes volants").map(p=>{ const d=pd(p.date); return d&&!isNaN(d)?d.getFullYear():null; }).filter(Boolean))].sort((a,b)=>a-b);
 
@@ -4179,11 +4350,13 @@ function CapturesChart({ passages, postes }) {
     const svgCap = "<svg width='"+W2+"' height='"+H2+"' xmlns='http://www.w3.org/2000/svg' style='background:#f9fafb;border-radius:8px;border:1px solid #e5e7eb'>"+barsSvg+"</svg>";
 
     const typeLabel = typeFilter==="RE"?"Rongeurs exterieurs":typeFilter==="RI"?"Rongeurs interieurs":"Tous rongeurs";
+    const macroLabel = (macroFilter && macroFilter!=="Toutes") ? " - Zone macro : "+macroFilter : "";
+    const molTox = moleculesToxiquesTexte(passages, postesRongeurs);
     const rows = stats.map(s=>"<tr><td>"+s.date+"</td><td style='font-weight:700'>"+s.captures+"</td></tr>").join("");
 
     exportHTML("Captures rongeurs - "+CLIENT_CONFIG.nom,
-      "<h1>Captures rongeurs - "+typeLabel+"</h1>"+
-      "<p style='color:#6b7280;margin-bottom:16px'>"+CLIENT_CONFIG.nom+" - "+new Date().toLocaleDateString("fr-FR")+"</p>"+
+      "<h1>Captures rongeurs - "+typeLabel+macroLabel+"</h1>"+
+      "<p style='color:#6b7280;margin-bottom:16px'>"+CLIENT_CONFIG.nom+" - "+new Date().toLocaleDateString("fr-FR")+(molTox?" &middot; Molécules toxiques : "+molTox:"")+"</p>"+
       svgCap+
       "<table style='width:100%;border-collapse:collapse;margin-top:16px'><thead><tr><th>Date</th><th>Captures</th></tr></thead><tbody>"+rows+"</tbody></table>"
     );
@@ -4201,6 +4374,13 @@ function CapturesChart({ passages, postes }) {
             </button>
           ))}
         </div>
+      </div>
+      <div>
+        <label style={{fontSize:9,color:"#7a90aa",display:"block",marginBottom:3}}>Zone macro</label>
+        <select value={produitNuFilter} onChange={e=>setProduitNuFilter(e.target.value)} style={inpStyle}><option value="tous">Produit nu : tous</option><option value="oui">En zone produit nu</option><option value="non">Hors produit nu</option></select>
+        <select value={macroFilter} onChange={e=>setMacroFilter(e.target.value)} style={inpStyle}>
+          {macrosDispo.map(m=><option key={m} value={m}>{m}</option>)}
+        </select>
       </div>
       <div>
         <label style={{fontSize:9,color:"#7a90aa",display:"block",marginBottom:3}}>Annee(s)</label>
@@ -4237,7 +4417,7 @@ function CapturesChart({ passages, postes }) {
           {echelle==="manuel" && <input type="number" min="1" value={maxManuel} onChange={e=>setMaxManuel(e.target.value)} style={{...inpStyle,width:60}}/>}
         </div>
       </div>
-      <button onClick={()=>{setTypeFilter("tous");setFilterAnnee("Toutes");setSelectedAnnees([]);setFilterTrimestre("Tous");setFilterMois("Tous");setEchelle("auto");}}
+      <button onClick={()=>{setTypeFilter("tous");setMacroFilter("Toutes");setFilterAnnee("Toutes");setSelectedAnnees([]);setFilterTrimestre("Tous");setFilterMois("Tous");setEchelle("auto");}}
         style={{background:"transparent",color:"#7a90aa",border:"1px solid #3d5270",borderRadius:7,padding:"6px 12px",fontSize:11,cursor:"pointer",fontFamily:"inherit"}}>
         Reset
       </button>
@@ -4313,6 +4493,8 @@ function CapturesChart({ passages, postes }) {
 
 function PostesTouchesChart({ passages, postes }) {
   const [typeFilter, setTypeFilter] = usePersistedValue("PostesTouches_typeFilter", "tous"); // tous | RE | RI
+  const [macroFilter, setMacroFilter] = usePersistedValue("PostesTouches_macroFilter", "Toutes"); // zone macro, cumulable avec le type
+  const [produitNuFilter, setProduitNuFilter] = usePersistedValue("PostesTouches_produitNuFilter", "tous"); // tous | oui | non
   const [filterAnnee, setFilterAnnee] = usePersistedValue("PostesTouches_filterAnnee", anneeDefaut(passages));
   const [selectedAnnees, setSelectedAnnees] = usePersistedValue("PostesTouches_selectedAnnees", []);
   const [filterTrimestre, setFilterTrimestre] = usePersistedValue("PostesTouches_filterTrimestre", "Tous");
@@ -4326,7 +4508,8 @@ function PostesTouchesChart({ passages, postes }) {
   const pd = d => { if(!d) return new Date(0); const p=(d||"").split("/"); return p.length===3?new Date(p[2]+"-"+p[1]+"-"+p[0]):new Date(d); };
   const MOIS_LABELS = ["Jan.","Fév","Mar","Avr","Mai","Jun","Jul","Aoû","Sep","Oct","Nov","Dec"];
 
-  const postesRongeurs = postes.filter(p => (p.nuisible||"Rongeurs") === "Rongeurs" && (typeFilter==="tous" || p.type===typeFilter));
+  const postesRongeurs = postes.filter(p => (p.nuisible||"Rongeurs") === "Rongeurs" && (typeFilter==="tous" || p.type===typeFilter) && (macroFilter==="Toutes" || (p.macro||"")===macroFilter) && (produitNuFilter==="tous" || (produitNuFilter==="oui" ? !!p.produit_nu : !p.produit_nu)));
+  const macrosDispo = ["Toutes", ...Array.from(new Set(postes.filter(p=>(p.nuisible||"Rongeurs")==="Rongeurs").map(p=>p.macro).filter(Boolean)))];
   const totalPostes = postesRongeurs.length;
 
   const annees = [...new Set(passages.filter(p=>p.type!=="Insectes volants").map(p=>{ const d=pd(p.date); return d&&!isNaN(d)?d.getFullYear():null; }).filter(Boolean))].sort((a,b)=>a-b);
@@ -4423,11 +4606,13 @@ function PostesTouchesChart({ passages, postes }) {
     const svgChart = "<svg width='"+W2+"' height='"+H2+"' xmlns='http://www.w3.org/2000/svg' style='background:#f9fafb;border-radius:8px;border:1px solid #e5e7eb'>"+totalLineSvg+barsSvg+"</svg>";
 
     const typeLabel = typeFilter==="RE"?"Rongeurs exterieurs":typeFilter==="RI"?"Rongeurs interieurs":"Tous rongeurs";
+    const macroLabel = (macroFilter && macroFilter!=="Toutes") ? " - Zone macro : "+macroFilter : "";
+    const molTox = moleculesToxiquesTexte(passages, postesRongeurs);
     const rows = stats.map(s=>"<tr><td>"+s.date+"</td><td style='font-weight:700'>"+s.touches+" / "+totalPostes+"</td></tr>").join("");
 
     exportHTML("Postes rongeurs touchés - "+CLIENT_CONFIG.nom,
-      "<h1>Postes rongeurs touchés - "+typeLabel+"</h1>"+
-      "<p style='color:#6b7280;margin-bottom:16px'>"+CLIENT_CONFIG.nom+" - "+new Date().toLocaleDateString("fr-FR")+"</p>"+
+      "<h1>Postes rongeurs touchés - "+typeLabel+macroLabel+"</h1>"+
+      "<p style='color:#6b7280;margin-bottom:16px'>"+CLIENT_CONFIG.nom+" - "+new Date().toLocaleDateString("fr-FR")+(molTox?" &middot; Molécules toxiques : "+molTox:"")+"</p>"+
       svgChart+
       "<table style='width:100%;border-collapse:collapse;margin-top:16px'><thead><tr><th>Date</th><th>Postes rongeurs touchés</th></tr></thead><tbody>"+rows+"</tbody></table>"
     );
@@ -4445,6 +4630,13 @@ function PostesTouchesChart({ passages, postes }) {
             </button>
           ))}
         </div>
+      </div>
+      <div>
+        <label style={{fontSize:9,color:"#7a90aa",display:"block",marginBottom:3}}>Zone macro</label>
+        <select value={produitNuFilter} onChange={e=>setProduitNuFilter(e.target.value)} style={inpStyle}><option value="tous">Produit nu : tous</option><option value="oui">En zone produit nu</option><option value="non">Hors produit nu</option></select>
+        <select value={macroFilter} onChange={e=>setMacroFilter(e.target.value)} style={inpStyle}>
+          {macrosDispo.map(m=><option key={m} value={m}>{m}</option>)}
+        </select>
       </div>
       <div>
         <label style={{fontSize:9,color:"#7a90aa",display:"block",marginBottom:3}}>Annee(s)</label>
@@ -4486,7 +4678,7 @@ function PostesTouchesChart({ passages, postes }) {
         style={{background:showTotal?"#243352":"transparent",color:showTotal?"#f1f5f9":"#7a90aa",border:"1px solid "+(showTotal?"#5a7090":"#3d5270"),borderRadius:7,padding:"6px 12px",fontSize:11,fontWeight:600,cursor:"pointer",fontFamily:"inherit"}}>
         {showTotal?"Masquer":"Afficher"} ligne totale
       </button>
-      <button onClick={()=>{setTypeFilter("tous");setFilterAnnee("Toutes");setSelectedAnnees([]);setFilterTrimestre("Tous");setFilterMois("Tous");setShowTotal(true);setEchelle("auto");}}
+      <button onClick={()=>{setTypeFilter("tous");setMacroFilter("Toutes");setFilterAnnee("Toutes");setSelectedAnnees([]);setFilterTrimestre("Tous");setFilterMois("Tous");setShowTotal(true);setEchelle("auto");}}
         style={{background:"transparent",color:"#7a90aa",border:"1px solid #3d5270",borderRadius:7,padding:"6px 12px",fontSize:11,cursor:"pointer",fontFamily:"inherit"}}>
         Reset
       </button>
@@ -4573,7 +4765,8 @@ function PostesTouchesChart({ passages, postes }) {
 }
 
 
-function DeivEvolutionStandaloneChart({ passages }) {
+function DeivEvolutionStandaloneChart({ passages, postes }) {
+  postes = postes || [];
   const CATS = ["Moucherons","Mouches","Moustiques","Hyménoptères","Lépidoptères","Coléoptères","Punaises","Tipules"];
   const CAT_COLORS = {"Moucherons":"#f59e0b","Mouches":"#ef4444","Moustiques":"#3b82f6","Hyménoptères":"#22c55e","Lépidoptères":"#8b5cf6","Coléoptères":"#06b6d4","Punaises":"#f97316","Tipules":"#7a90aa"};
   const DEFAULT_SEUILS = {
@@ -4588,6 +4781,12 @@ function DeivEvolutionStandaloneChart({ passages }) {
   };
 
   const [selectedCats, setSelectedCats] = usePersistedValue("DeivEvolution_selectedCats", []); // [] = Total toutes especes
+  const [produitNuFilter, setProduitNuFilter] = usePersistedValue("DeivEvolution_produitNuFilter", "tous"); // tous | oui | non
+  const [natureFilter, setNatureFilter] = usePersistedValue("DeivEvolution_natureFilter", "toutes"); // toutes | Destructeur | Monitoring
+  const _deivFilterActive = produitNuFilter!=="tous" || natureFilter!=="toutes";
+  const allowedDeivSet = _deivFilterActive ? new Set(postes.filter(p => p.type==="DEIV"
+      && (produitNuFilter==="tous" || (produitNuFilter==="oui" ? !!p.produit_nu : !p.produit_nu))
+      && (natureFilter==="toutes" || (p.nature||"")===natureFilter)).map(p=>p.id)) : null;
   const [filterAnnee, setFilterAnnee] = usePersistedValue("DeivEvolution_filterAnnee", anneeDefaut(passages.filter(p=>p.type==="Insectes volants")));
   const [selectedAnnees, setSelectedAnnees] = usePersistedValue("DeivEvolution_selectedAnnees", []);
   const [filterTrimestre, setFilterTrimestre] = usePersistedValue("DeivEvolution_filterTrimestre", "Tous");
@@ -4645,12 +4844,12 @@ function DeivEvolutionStandaloneChart({ passages }) {
     const result = { date: passage.date };
     if (selectedCats.length === 0) {
       let total = 0;
-      Object.values(saisies).forEach(s=>{ CATS.forEach(cat=>{ total += parseInt(s["iv_"+cat]||0); }); });
+      Object.entries(saisies).forEach(([__id,s])=>{ if(allowedDeivSet && !allowedDeivSet.has(__id)) return; CATS.forEach(cat=>{ total += parseInt(s["iv_"+cat]||0); }); });
       result.__TOTAL__ = total;
     } else {
       selectedCats.forEach(cat=>{
         let val = 0;
-        Object.values(saisies).forEach(s=>{ val += parseInt(s["iv_"+cat]||0); });
+        Object.entries(saisies).forEach(([__id,s])=>{ if(allowedDeivSet && !allowedDeivSet.has(__id)) return; val += parseInt(s["iv_"+cat]||0); });
         result[cat] = val;
       });
     }
@@ -4764,6 +4963,18 @@ function DeivEvolutionStandaloneChart({ passages }) {
           })}
           {selectedAnnees.length>0&&<button onClick={()=>setSelectedAnnees([])} style={{background:"transparent",color:"#ef4444",border:"1px solid #ef444433",borderRadius:6,padding:"6px 8px",fontSize:10,cursor:"pointer",fontFamily:"inherit"}}>x</button>}
         </div>
+      </div>
+      <div>
+        <label style={{fontSize:9,color:"#7a90aa",display:"block",marginBottom:3}}>Produit nu</label>
+        <select value={produitNuFilter} onChange={e=>setProduitNuFilter(e.target.value)} style={inpStyle}>
+          <option value="tous">Tous</option><option value="oui">En zone produit nu</option><option value="non">Hors produit nu</option>
+        </select>
+      </div>
+      <div>
+        <label style={{fontSize:9,color:"#7a90aa",display:"block",marginBottom:3}}>Nature</label>
+        <select value={natureFilter} onChange={e=>setNatureFilter(e.target.value)} style={inpStyle}>
+          <option value="toutes">Toutes</option><option value="Destructeur">Destructeur</option><option value="Monitoring">Monitoring</option>
+        </select>
       </div>
       <div>
         <label style={{fontSize:9,color:"#7a90aa",display:"block",marginBottom:3}}>Trimestre</label>
@@ -4893,6 +5104,8 @@ function DeivParAppareilChart({ passages, postes }) {
   const [filterTrimestre, setFilterTrimestre] = usePersistedValue("DeivParAppareil_filterTrimestre", "Tous");
   const [filterMois, setFilterMois] = usePersistedValue("DeivParAppareil_filterMois", "Tous");
   const [selectedCats, setSelectedCats] = usePersistedValue("DeivParAppareil_selectedCats", []);
+  const [produitNuFilter, setProduitNuFilter] = usePersistedValue("DeivParAppareil_produitNuFilter", "tous"); // tous | oui | non
+  const [natureFilter, setNatureFilter] = usePersistedValue("DeivParAppareil_natureFilter", "toutes"); // toutes | Destructeur | Monitoring
   const [showSeuils, setShowSeuils] = usePersistedValue("DeivParAppareil_showSeuils", true);
   const [fullscreen, setFullscreen] = useState(false);
   const [collapsed, setCollapsed] = usePersistedCollapsed("DeivParAppareil", false);
@@ -4911,6 +5124,7 @@ function DeivParAppareilChart({ passages, postes }) {
     Tipules:      { leger:10,  moyen:20  },
   };
   const [seuilsIV, setSeuilsIV] = useState(DEFAULT_SEUILS_IV);
+  const [deivGroupes, setDeivGroupes] = useState([]);
 
   useEffect(() => {
     sbGet("seuils").then(data => {
@@ -4918,6 +5132,7 @@ function DeivParAppareilChart({ passages, postes }) {
         try {
           const parsed = typeof data[0].data === "string" ? JSON.parse(data[0].data) : data[0].data;
           if (parsed.iv) setSeuilsIV({...DEFAULT_SEUILS_IV, ...parsed.iv});
+          if (Array.isArray(parsed.deivGroupes)) setDeivGroupes(parsed.deivGroupes);
         } catch(_e) { return; }
       }
     }).catch(()=>{});
@@ -4928,7 +5143,9 @@ function DeivParAppareilChart({ passages, postes }) {
   const CATS = ["Moucherons","Mouches","Moustiques","Hyménoptères","Lépidoptères","Coléoptères","Punaises","Tipules"];
   const CAT_COLORS = {"Moucherons":"#f59e0b","Mouches":"#ef4444","Moustiques":"#3b82f6","Hyménoptères":"#22c55e","Lépidoptères":"#8b5cf6","Coléoptères":"#06b6d4","Punaises":"#f97316","Tipules":"#7a90aa"};
 
-  const deivList = postes.filter(p => p.type === "DEIV").sort((a,b) => {
+  const deivList = postes.filter(p => p.type === "DEIV"
+      && (produitNuFilter==="tous" || (produitNuFilter==="oui" ? !!p.produit_nu : !p.produit_nu))
+      && (natureFilter==="toutes" || (p.nature||"")===natureFilter)).sort((a,b) => {
     const na = parseInt((a.id.match(/\d+/)||["0"])[0]);
     const nb = parseInt((b.id.match(/\d+/)||["0"])[0]);
     return na - nb;
@@ -4970,6 +5187,10 @@ function DeivParAppareilChart({ passages, postes }) {
   });
   const topDeivSorted = [...deivList].sort((a,b)=>(totauxParDeiv[b.id]||0)-(totauxParDeiv[a.id]||0));
   const deivActif = selectedDeiv || (topDeivSorted.length>0 ? topDeivSorted[0].id : "");
+  // Seuils effectifs de l appareil affiche : ceux de son groupe DEIV si present, sinon les globaux.
+  const grpDeiv = (deivGroupes||[]).find(g=>g && Array.isArray(g.deivs) && g.deivs.indexOf(deivActif)>=0) || null;
+  const seuilsEff = (grpDeiv && grpDeiv.cats) ? {...seuilsIV, ...grpDeiv.cats} : seuilsIV;
+  const seuilTotalGrp = (grpDeiv && grpDeiv.total && (grpDeiv.total.leger||grpDeiv.total.moyen)) ? grpDeiv.total : null;
 
   function getStats(passage) {
     const saisies = typeof passage.saisies === "string" ? JSON.parse(passage.saisies||"{}") : (passage.saisies||{});
@@ -4995,12 +5216,15 @@ function DeivParAppareilChart({ passages, postes }) {
   // Seuils traces : soit le type choisi explicitement, soit les especes affichees
   const seuilCats = seuilCat !== "auto" ? [seuilCat] : (selectedCats.length > 0 ? selectedCats : CATS);
   const seuilRef = !showSeuils ? 0
-    : seuilCat !== "auto" ? ((seuilsIV[seuilCat]||{}).moyen || 0)
-    : (selectedCats.length === 1 && seuilsIV[selectedCats[0]]) ? seuilsIV[selectedCats[0]].moyen : 0;
+    : seuilCat !== "auto" ? ((seuilsEff[seuilCat]||{}).moyen || 0)
+    : (selectedCats.length === 1 && seuilsEff[selectedCats[0]]) ? seuilsEff[selectedCats[0]].moyen : 0;
   const maxDonnees = Math.max(...stats.map(s=>s.total), ...statsParAnnee.flatMap(sa=>sa.stats.map(s=>s.total)), seuilRef, 1);
   const maxAuto = Math.max(5, Math.ceil(maxDonnees*1.25/5)*5);
   const maxVal = echelle === "manuel" ? Math.max(1, parseInt(maxManuel)||10) : maxAuto;
   function xPos(i) { return PAD + (stats.length > 1 ? i/(stats.length-1)*(W-PAD*2) : (W-PAD*2)/2); }
+  // Multi-annees : on positionne par MOIS (0-11) et non par index, sinon le dernier
+  // point de chaque annee tombe au meme X (ex: juillet 2026 sur decembre 2025).
+  function xMoisDate(dstr){ const d=pd(dstr); const m=(d&&!isNaN(d))?d.getMonth():0; return PAD + (m/11)*(W-PAD*2); }
   function yVal(v) { return H - PAD - (Math.min(v,maxVal)/maxVal)*(H-PAD*2); }
   const inpStyle = { background:"#243352", border:"1px solid #3d5270", borderRadius:7, padding:"6px 10px", color:"#f1f5f9", fontSize:11, fontFamily:"inherit" };
 
@@ -5016,8 +5240,8 @@ function DeivParAppareilChart({ passages, postes }) {
     if (statsParAnnee.length > 1) {
       chartBody = statsParAnnee.map(function(sa){
         if (sa.stats.length < 1) return "";
-        const pts = sa.stats.map(function(s,i){ const x = sa.stats.length>1?PAD2+i/(sa.stats.length-1)*(W2-PAD2*2):W2/2; return x+","+yVal2(s.total); }).join(" ");
-        const circles = sa.stats.map(function(s,i){ const x=sa.stats.length>1?PAD2+i/(sa.stats.length-1)*(W2-PAD2*2):W2/2; const y=yVal2(s.total); return "<circle cx='"+x+"' cy='"+y+"' r='4' fill='"+sa.color+"'/>"+(s.total>0?"<text x='"+x+"' y='"+(y-9)+"' font-size='8' fill='"+sa.color+"' text-anchor='middle'>"+s.total+"</text>":""); }).join("");
+        const pts = sa.stats.map(function(s,i){ const x = xMoisDate(s.date); return x+","+yVal2(s.total); }).join(" ");
+        const circles = sa.stats.map(function(s,i){ const x=xMoisDate(s.date); const y=yVal2(s.total); return "<circle cx='"+x+"' cy='"+y+"' r='4' fill='"+sa.color+"'/>"+(s.total>0?"<text x='"+x+"' y='"+(y-9)+"' font-size='8' fill='"+sa.color+"' text-anchor='middle'>"+s.total+"</text>":""); }).join("");
         return (sa.stats.length>1?"<polyline points='"+pts+"' fill='none' stroke='"+sa.color+"' stroke-width='2'/>":"")+circles;
       }).join("");
     } else {
@@ -5081,6 +5305,18 @@ function DeivParAppareilChart({ passages, postes }) {
         </div>
       </div>
       <div>
+        <label style={{fontSize:9,color:"#7a90aa",display:"block",marginBottom:3}}>Produit nu</label>
+        <select value={produitNuFilter} onChange={e=>setProduitNuFilter(e.target.value)} style={inpStyle}>
+          <option value="tous">Tous</option><option value="oui">En zone produit nu</option><option value="non">Hors produit nu</option>
+        </select>
+      </div>
+      <div>
+        <label style={{fontSize:9,color:"#7a90aa",display:"block",marginBottom:3}}>Nature</label>
+        <select value={natureFilter} onChange={e=>setNatureFilter(e.target.value)} style={inpStyle}>
+          <option value="toutes">Toutes</option><option value="Destructeur">Destructeur</option><option value="Monitoring">Monitoring</option>
+        </select>
+      </div>
+      <div>
         <label style={{fontSize:9,color:"#7a90aa",display:"block",marginBottom:3}}>Trimestre</label>
         <select value={filterTrimestre} onChange={e=>setFilterTrimestre(e.target.value)} style={inpStyle}>
           <option value="Tous">Tous</option>
@@ -5108,7 +5344,7 @@ function DeivParAppareilChart({ passages, postes }) {
         <label style={{fontSize:9,color:"#7a90aa",display:"block",marginBottom:3}}>Seuil affiché</label>
         <select value={seuilCat} onChange={e=>setSeuilCat(e.target.value)} style={inpStyle}>
           <option value="auto">Espèces affichées</option>
-          {CATS.filter(c=>seuilsIV[c]).map(c=><option key={c} value={c}>{c}</option>)}
+          {CATS.filter(c=>seuilsEff[c]).map(c=><option key={c} value={c}>{c}</option>)}
         </select>
       </div>
       <button onClick={()=>{setSelectedDeiv("");setFilterAnnee("Toutes");setSelectedAnnees([]);setFilterTrimestre("Tous");setFilterMois("Tous");setSelectedCats([]);setEchelle("auto");setSeuilCat("auto");}}
@@ -5141,9 +5377,9 @@ function DeivParAppareilChart({ passages, postes }) {
         {[0,25,50,75,100].map(pct=>{ const v=Math.round(maxVal*pct/100); const y=yVal(v); return(<g key={pct}><line x1={PAD} x2={W-PAD} y1={y} y2={y} stroke="#2d3f62" strokeWidth="1"/><text x={PAD-4} y={y+4} fontSize="9" fill="#5a7090" textAnchor="end">{v}</text></g>); })}
         {showSeuils && (()=>{
           const catsToShow = seuilCats;
-          return catsToShow.filter(cat=>seuilsIV[cat]).map(cat=>{
-            const sl = seuilsIV[cat].leger;
-            const sm = seuilsIV[cat].moyen;
+          const catLines = catsToShow.filter(cat=>seuilsEff[cat]).map(cat=>{
+            const sl = seuilsEff[cat].leger;
+            const sm = seuilsEff[cat].moyen;
             const col = CAT_COLORS[cat]||"#f59e0b";
             return (<g key={cat}>
               {sl<=maxVal && (<>
@@ -5156,13 +5392,27 @@ function DeivParAppareilChart({ passages, postes }) {
               </>)}
             </g>);
           });
+          // Ligne de seuil TOTAL du groupe (la courbe = total insectes) : violet.
+          const totalLine = seuilTotalGrp ? (
+            <g key="__totalgrp__">
+              {(seuilTotalGrp.leger||0)>0 && seuilTotalGrp.leger<=maxVal && (<>
+                <line x1={PAD} x2={W-PAD} y1={yVal(seuilTotalGrp.leger)} y2={yVal(seuilTotalGrp.leger)} stroke="#c084fc" strokeWidth="1.5" strokeDasharray="6,3"/>
+                <text x={W-PAD+4} y={yVal(seuilTotalGrp.leger)+4} fontSize="8" fill="#c084fc">Total {seuilTotalGrp.leger}</text>
+              </>)}
+              {(seuilTotalGrp.moyen||0)>0 && seuilTotalGrp.moyen<=maxVal && (<>
+                <line x1={PAD} x2={W-PAD} y1={yVal(seuilTotalGrp.moyen)} y2={yVal(seuilTotalGrp.moyen)} stroke="#c084fc" strokeWidth="2" strokeDasharray="4,3"/>
+                <text x={W-PAD+4} y={yVal(seuilTotalGrp.moyen)+4} fontSize="8" fill="#c084fc" fontWeight="700">Total {seuilTotalGrp.moyen}</text>
+              </>)}
+            </g>
+          ) : null;
+          return totalLine ? [totalLine, ...catLines] : catLines;
         })()}
         {statsParAnnee.length > 1 ? statsParAnnee.map((sa,ai)=>{
           if(sa.stats.length < 1) return null;
-          const poly = sa.stats.map((s,i)=>{ const x=sa.stats.length>1?PAD+i/(sa.stats.length-1)*(W-PAD*2):W/2; return x+","+yVal(s.total); }).join(" ");
+          const poly = sa.stats.map((s,i)=>{ const x=xMoisDate(s.date); return x+","+yVal(s.total); }).join(" ");
           return (<g key={sa.annee}>
             {sa.stats.length>1&&<polyline points={poly} fill="none" stroke={sa.color} strokeWidth="2.5" strokeLinejoin="round"/>}
-            {sa.stats.map((s,i)=>{ const x=sa.stats.length>1?PAD+i/(sa.stats.length-1)*(W-PAD*2):W/2; return (<g key={i}><circle cx={x} cy={yVal(s.total)} r="4" fill={sa.color} stroke="#1a2540" strokeWidth="2"/>{s.total>0&&<text x={x} y={yVal(s.total)-9} fontSize="8" fill={sa.color} textAnchor="middle">{s.total}</text>}{ai===0&&<text x={x} y={H-8} fontSize="8" fill="#5a7090" textAnchor="middle" transform={"rotate(-30 "+x+" "+(H-8)+")"}>{(s.date||"").slice(0,5)}</text>}</g>); })}
+            {sa.stats.map((s,i)=>{ const x=xMoisDate(s.date); return (<g key={i}><circle cx={x} cy={yVal(s.total)} r="4" fill={sa.color} stroke="#1a2540" strokeWidth="2"/>{s.total>0&&<text x={x} y={yVal(s.total)-9} fontSize="8" fill={sa.color} textAnchor="middle">{s.total}</text>}{ai===0&&<text x={x} y={H-8} fontSize="8" fill="#5a7090" textAnchor="middle" transform={"rotate(-30 "+x+" "+(H-8)+")"}>{(s.date||"").slice(0,5)}</text>}</g>); })}
           </g>);
         }) : (<g>
           {stats.length>1&&<polyline points={stats.map((s,i)=>xPos(i)+","+yVal(s.total)).join(" ")} fill="none" stroke="#f59e0b" strokeWidth="2.5" strokeLinejoin="round"/>}
@@ -5808,6 +6058,8 @@ function Statistiques() {
   const MACROS_ALL    = ["Toutes",...MACROS];
   const MOIS_LABELS   = ["Jan.","Fév","Mar","Avr","Mai","Jun","Jul","Aoû","Sep","Oct","Nov","Dec"];
   const CATS_IV = ["Moucherons","Mouches","Moustiques","Hyménoptères","Lépidoptères","Coléoptères","Punaises","Tipules"];
+  // Postes actifs : on exclut les postes desactives de toutes les stats/graphes.
+  const postesActifs = postes.filter(p => p.statut !== "Désactivé");
 
   useEffect(() => {
     sbGet("passages").then(data => { if (data && data.length > 0) setPassages(data); }).catch(()=>{});
@@ -5940,34 +6192,34 @@ function Statistiques() {
         <div id="tendances-export-zone">
           {/* Taux d activite - composant autonome avec ses propres filtres */}
           <div className="export-card-block">
-            <TauxActiviteChart passages={passages} postes={postes} />
+            <TauxActiviteChart passages={passages} postes={postesActifs} />
           </div>
 
           {/* Postes touchés - composant autonome avec ses propres filtres */}
           <div className="export-card-block">
-            <PostesTouchesChart passages={passages} postes={postes} />
+            <PostesTouchesChart passages={passages} postes={postesActifs} />
           </div>
 
           {/* Captures - composant autonome avec ses propres filtres */}
           <div className="export-card-block">
-            <CapturesChart passages={passages} postes={postes} />
+            <CapturesChart passages={passages} postes={postesActifs} />
           </div>
           <div className="export-card-block">
-            <ToxiquePlaceboChart passages={passages} postes={postes} />
+            <ToxiquePlaceboChart passages={passages} postes={postesActifs} />
           </div>
           <div className="export-card-block">
-            <MoleculesChart passages={passages} postes={postes} />
+            <MoleculesChart passages={passages} postes={postesActifs} />
           </div>
 
           {/* Graphes avances */}
-          <div className="export-card-block"><DeivEvolutionStandaloneChart passages={passages} /></div>
-          <div className="export-card-block"><TeignesEvolutionChart passages={passages} postes={postes} /></div>
-          <div className="export-card-block"><DeivParAppareilChart passages={passages} postes={postes} /></div>
+          <div className="export-card-block"><DeivEvolutionStandaloneChart passages={passages} postes={postesActifs} /></div>
+          <div className="export-card-block"><TeignesEvolutionChart passages={passages} postes={postesActifs} /></div>
+          <div className="export-card-block"><DeivParAppareilChart passages={passages} postes={postesActifs} /></div>
           <div className="export-card-block"><ReinterPassagesChart passages={passages} reinterventions={reinterventions} /></div>
-          <div className="export-card-block"><Top10PostesChart passages={passages} postes={postes} /></div>
+          <div className="export-card-block"><Top10PostesChart passages={passages} postes={postesActifs} /></div>
           <div className="export-card-block"><PassagesParAnneeChart passages={passages} reinterventions={reinterventions} /></div>
           <div className="export-card-block"><PlanActionsPieChart actions={actions} /></div>
-          <div className="export-card-block"><PostesNuisiblePieChart postes={postes} /></div>
+          <div className="export-card-block"><PostesNuisiblePieChart postes={postesActifs} /></div>
         </div>
       )}
     </div>
@@ -6446,6 +6698,7 @@ function PlanActions() {
   const [filter, setFilter] = useState("Toutes");
   const [filterAnneeTable, setFilterAnneeTable] = useState("Toutes");
   const [filterMoisTable, setFilterMoisTable] = useState("Tous");
+  const [filterAnneesStats, setFilterAnneesStats] = useState([new Date().getFullYear()]); // annees des graphes 5M/zone (multi-selection ; defaut : annee en cours)
   const [showForm, setShowForm] = useState(false);
   const [editId, setEditId] = useState(null);
   const [lightbox, setLightbox] = useState(null);
@@ -6538,7 +6791,9 @@ function PlanActions() {
       setActions(prev => prev.map(a => {
         if (a.id !== editId) return a;
         const updated = { ...a, ...draft, photos: draftPhotos };
-        sbUpsert("plan_actions", { id:updated.id, contrat:CLIENT_CONFIG.contrat, titre5m:draft.titre5m, type:draft.type, priorite:draft.priorite, zone:draft.zone, description:draft.description, recommandation:draft.recommandation, technicien:draft.technicien, piege_ref:draft.piegeRef||"", statut:updated.statut||"Planifiée", date_detection:updated.dateDetection||"", photos:JSON.stringify(draftPhotos) });
+        // PATCH cible (par id) plutot qu un upsert merge-duplicates : plus robuste,
+        // ne depend pas d une contrainte unique sur la table.
+        sbUpdate("plan_actions", updated.id, { titre5m:draft.titre5m, type:draft.type, priorite:draft.priorite, zone:draft.zone, description:draft.description, recommandation:draft.recommandation, technicien:draft.technicien, piege_ref:draft.piegeRef||"", statut:updated.statut||"Planifiée", date_detection:updated.dateDetection||"", photos:JSON.stringify(draftPhotos) });
         return updated;
       }));
     } else {
@@ -6569,14 +6824,7 @@ function PlanActions() {
     setActions(prev => prev.map(a => {
       if (a.id !== id) return a;
       const updated = { ...a, statut };
-      sbUpsert("plan_actions", {
-        id: updated.id, contrat: CLIENT_CONFIG.contrat,
-        titre5m: updated.titre5m, type: updated.type, priorite: updated.priorite, zone: updated.zone,
-        description: updated.description, recommandation: updated.recommandation, technicien: updated.technicien,
-        piege_ref: updated.piegeRef||"",
-        statut: updated.statut, date_detection: updated.dateDetection||"",
-        photos: JSON.stringify(updated.photos || [])
-      });
+      sbUpdate("plan_actions", updated.id, { statut: updated.statut });
       return updated;
     }));
   }
@@ -6584,6 +6832,10 @@ function PlanActions() {
   const filteredByStatut = filter === "Toutes" ? actions : actions.filter(a => a.statut === filter);
   const pdFilter = d => { if(!d) return new Date(0); const p=(d||"").split("/"); return p.length===3?new Date(p[2]+"-"+p[1]+"-"+p[0]):new Date(d); };
   const anneesDispoTable = [...new Set(actions.map(a=>{ const d=pdFilter(a.dateDetection); return d&&!isNaN(d)?d.getFullYear():null; }).filter(Boolean))].sort((a,b)=>b-a);
+  // Annees proposees pour les graphes 5M/zone : l annee en cours est toujours presente, meme sans donnee.
+  const anneesStatsOpts = [...new Set([new Date().getFullYear(), ...anneesDispoTable])].sort((a,b)=>b-a);
+  const actionsStats = filterAnneesStats.length === 0 ? actions : actions.filter(a=>{ const d=pdFilter(a.dateDetection); return d && !isNaN(d) && filterAnneesStats.includes(d.getFullYear()); });
+  const labelAnneesStats = filterAnneesStats.length === 0 ? "" : " — " + [...filterAnneesStats].sort((a,b)=>a-b).join(", ");
   const MOIS_LABELS_TABLE = ["Janvier","Fevrier","Mars","Avril","Mai","Juin","Juillet","Aout","Septembre","Octobre","Novembre","Decembre"];
   const filtered = filteredByStatut.filter(a => {
     const d = pdFilter(a.dateDetection);
@@ -6919,10 +7171,26 @@ function PlanActions() {
       )}
 
       {/* Graphes statistiques */}
-      <div style={{display:"flex",justifyContent:"flex-end",marginBottom:8}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8,gap:8,flexWrap:"wrap"}}>
+        <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+          <span style={{fontSize:12,color:"#7a90aa"}}>Année(s) :</span>
+          <button onClick={()=>setFilterAnneesStats([])}
+            style={{ background:filterAnneesStats.length===0?"#1d4ed8":"#243352", color:filterAnneesStats.length===0?"#fff":"#7a90aa", border:"1px solid "+(filterAnneesStats.length===0?"#3b82f6":"#3d5270"), borderRadius:6, padding:"5px 12px", fontSize:11, fontWeight:filterAnneesStats.length===0?700:400, cursor:"pointer", fontFamily:"inherit" }}>
+            Toutes
+          </button>
+          {anneesStatsOpts.map(y=>{
+            const on = filterAnneesStats.includes(y);
+            return (
+              <button key={y} onClick={()=>setFilterAnneesStats(prev=>prev.includes(y)?prev.filter(x=>x!==y):[...prev,y])}
+                style={{ background:on?"#1d4ed8":"#243352", color:on?"#fff":"#7a90aa", border:"1px solid "+(on?"#3b82f6":"#3d5270"), borderRadius:6, padding:"5px 12px", fontSize:11, fontWeight:on?700:400, cursor:"pointer", fontFamily:"inherit" }}>
+                {y}
+              </button>
+            );
+          })}
+        </div>
         <button onClick={()=>{
           const headers = ["5M","Nb actions"];
-          const rows = CINQ_M.map(m=>[m, actions.filter(a=>a.titre5m===m).length]);
+          const rows = CINQ_M.map(m=>[m, actionsStats.filter(a=>a.titre5m===m).length]);
           exportCSV("repartition_5M_"+CLIENT_CONFIG.nom.replace(/\s+/g,"_"), headers, rows);
         }} title="Exporter la répartition 5M en Excel"
           style={{ background:"#22c55e22", color:"#22c55e", border:"1px solid #22c55e44", borderRadius:6, padding:"5px 12px", fontSize:11, fontWeight:700, cursor:"pointer", fontFamily:"inherit" }}>
@@ -6930,15 +7198,15 @@ function PlanActions() {
         </button>
       </div>
       <PieChart
-        title="Répartition par 5M"
+        title={"Répartition par 5M"+labelAnneesStats}
         chartKey="PlanActions_5M"
-        data={CINQ_M.map((m,i)=>({label:m, value: actions.filter(a=>a.titre5m===m).length, color:["#8b5cf6","#3b82f6","#22c55e","#f59e0b","#ef4444"][i]}))}
+        data={CINQ_M.map((m,i)=>({label:m, value: actionsStats.filter(a=>a.titre5m===m).length, color:["#8b5cf6","#3b82f6","#22c55e","#f59e0b","#ef4444"][i]}))}
       />
       <BarChartHorizontal
-        title="Répartition par zone"
+        title={"Répartition par zone"+labelAnneesStats}
         chartKey="PlanActions_Zone"
         color="#3b82f6"
-        data={Object.entries(actions.reduce((acc,a)=>{const z=a.zone||"Non renseigne";acc[z]=(acc[z]||0)+1;return acc;},{})).map(([label,value])=>({label,value}))}
+        data={Object.entries(actionsStats.reduce((acc,a)=>{const z=a.zone||"Non renseigne";acc[z]=(acc[z]||0)+1;return acc;},{})).map(([label,value])=>({label,value}))}
       />
       <EvolutionActionsChart actions={actions} />
       <ComparaisonAnneesActionsChart actions={actions} />
@@ -6985,6 +7253,7 @@ function SaisiePassage({ seuilsGlobaux, setSeuilsGlobaux, setReinterventions, se
   const [reinvPhotos, setReinvPhotos] = useState([]);
   const [activeTab, setActiveTab] = useState("saisie_tab");
   const [filterTypeMol, setFilterTypeMol] = useState("tous");
+  const [filterAnneeMol, setFilterAnneeMol] = useState("Toutes");
   const [deivForm, setDeivForm] = useState({ date:"", technicien:"" });
   const [deivSaisies, setDeivSaisies] = useState({});
   // Mode saisie telephone : poste selectionne + recherche + postes deja valides
@@ -7107,6 +7376,11 @@ function SaisiePassage({ seuilsGlobaux, setSeuilsGlobaux, setReinterventions, se
   function sortPostes(list, ignorePrefix) {
     const TYPE_ORDER = { "RE": 0, "RI": 1 };
     return list.slice().sort((a,b)=>{
+      const oa = (a.ordre===undefined||a.ordre===null||a.ordre==="") ? null : Number(a.ordre);
+      const ob = (b.ordre===undefined||b.ordre===null||b.ordre==="") ? null : Number(b.ordre);
+      if (oa!==null && ob!==null) { if (oa!==ob) return oa - ob; }
+      else if (oa!==null) return -1;
+      else if (ob!==null) return 1;
       const ta = TYPE_ORDER[a.type] !== undefined ? TYPE_ORDER[a.type] : 99;
       const tb = TYPE_ORDER[b.type] !== undefined ? TYPE_ORDER[b.type] : 99;
       if (ta !== tb) return ta - tb;
@@ -7162,8 +7436,9 @@ function SaisiePassage({ seuilsGlobaux, setSeuilsGlobaux, setReinterventions, se
     const nuisible = p.nuisible||"Rongeurs";
     if (nuisible==="Rongeurs") {
       const total = (parseInt(s.cap_souris||0))+(parseInt(s.cap_ratBrun||0))+(parseInt(s.cap_ratNoir||0));
-      if (total >= seuils.rongeurs.capture_rouge || estConsoTotale(s.etat) || s.etat==="75%") return "#ef4444";
-      if (estConsoPartielle(s.etat)) return "#f59e0b";
+      if (total >= seuils.rongeurs.capture_rouge) return "#ef4444";
+      const cc = couleurConsoParSeuil(s.etat, seuils);
+      if (cc) return cc;
       return "#22c55e";
     }
     if (nuisible==="Blattes") {
@@ -7175,13 +7450,7 @@ function SaisiePassage({ seuilsGlobaux, setSeuilsGlobaux, setReinterventions, se
       return v>=seuils.teignes.moyen?"#ef4444":v>=seuils.teignes.leger?"#f59e0b":"#22c55e";
     }
     if (nuisible==="Insectes volants") {
-      let max = 0;
-      CATS_IV.forEach(cat => {
-        const v = parseInt(s["iv_"+cat]||0);
-        const sv = seuils.iv[cat]||{leger:999,moyen:9999};
-        if (v>=sv.moyen) max = Math.max(max,2);
-        else if (v>=sv.leger) max = Math.max(max,1);
-      });
+      const max = niveauDeiv(s, p, seuils);   // groupe DEIV (par categorie + total) ou repli global
       return max===2?"#ef4444":max===1?"#f59e0b":"#22c55e";
     }
     if (nuisible==="IPS") {
@@ -7362,13 +7631,13 @@ function SaisiePassage({ seuilsGlobaux, setSeuilsGlobaux, setReinterventions, se
               </div>
               <div>
                 <label style={{fontSize:10,color:"#7a90aa",fontWeight:600,textTransform:"uppercase",display:"block",marginBottom:3}}>Taux activite vigilance (%)</label>
-                <input type="number" min="0" max="100" value={seuils.rongeurs.taux_vigilance||5}
+                <input type="number" min="0" max="100" value={seuils.rongeurs.taux_vigilance ?? 5}
                   onChange={e=>setSeuils(prev=>({...prev,rongeurs:{...prev.rongeurs,taux_vigilance:parseInt(e.target.value)||0}}))}
                   style={{...inpStyle,width:80}}/>
               </div>
               <div>
                 <label style={{fontSize:10,color:"#7a90aa",fontWeight:600,textTransform:"uppercase",display:"block",marginBottom:3}}>Taux activite critique (%)</label>
-                <input type="number" min="0" max="100" value={seuils.rongeurs.taux_critique||10}
+                <input type="number" min="0" max="100" value={seuils.rongeurs.taux_critique ?? 10}
                   onChange={e=>setSeuils(prev=>({...prev,rongeurs:{...prev.rongeurs,taux_critique:parseInt(e.target.value)||0}}))}
                   style={{...inpStyle,width:80}}/>
               </div>
@@ -7400,13 +7669,13 @@ function SaisiePassage({ seuilsGlobaux, setSeuilsGlobaux, setReinterventions, se
             <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
               <div>
                 <label style={{fontSize:10,color:"#7a90aa",fontWeight:600,textTransform:"uppercase",display:"block",marginBottom:3}}>Orange min (captures)</label>
-                <input type="number" min="0" value={(seuils.rongeursExt||{}).leger||1}
+                <input type="number" min="0" value={(seuils.rongeursExt||{}).leger ?? 1}
                   onChange={e=>setSeuils(prev=>({...prev,rongeursExt:{...(prev.rongeursExt||{}),leger:parseInt(e.target.value)||0}}))}
                   style={{...inpStyle,width:80}}/>
               </div>
               <div>
                 <label style={{fontSize:10,color:"#7a90aa",fontWeight:600,textTransform:"uppercase",display:"block",marginBottom:3}}>Rouge min (captures)</label>
-                <input type="number" min="0" value={(seuils.rongeursExt||{}).moyen||3}
+                <input type="number" min="0" value={(seuils.rongeursExt||{}).moyen ?? 3}
                   onChange={e=>setSeuils(prev=>({...prev,rongeursExt:{...(prev.rongeursExt||{}),moyen:parseInt(e.target.value)||0}}))}
                   style={{...inpStyle,width:80}}/>
               </div>
@@ -7418,13 +7687,13 @@ function SaisiePassage({ seuilsGlobaux, setSeuilsGlobaux, setReinterventions, se
             <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
               <div>
                 <label style={{fontSize:10,color:"#7a90aa",fontWeight:600,textTransform:"uppercase",display:"block",marginBottom:3}}>Orange min (captures)</label>
-                <input type="number" min="0" value={(seuils.rongeursInt||{}).leger||1}
+                <input type="number" min="0" value={(seuils.rongeursInt||{}).leger ?? 1}
                   onChange={e=>setSeuils(prev=>({...prev,rongeursInt:{...(prev.rongeursInt||{}),leger:parseInt(e.target.value)||0}}))}
                   style={{...inpStyle,width:80}}/>
               </div>
               <div>
                 <label style={{fontSize:10,color:"#7a90aa",fontWeight:600,textTransform:"uppercase",display:"block",marginBottom:3}}>Rouge min (captures)</label>
-                <input type="number" min="0" value={(seuils.rongeursInt||{}).moyen||3}
+                <input type="number" min="0" value={(seuils.rongeursInt||{}).moyen ?? 3}
                   onChange={e=>setSeuils(prev=>({...prev,rongeursInt:{...(prev.rongeursInt||{}),moyen:parseInt(e.target.value)||0}}))}
                   style={{...inpStyle,width:80}}/>
               </div>
@@ -7505,6 +7774,53 @@ function SaisiePassage({ seuilsGlobaux, setSeuilsGlobaux, setReinterventions, se
                 </div>
               ))}
             </div>
+          </Card>
+          <Card style={{marginBottom:14}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+              <div style={{fontSize:14,fontWeight:700,color:"#f1f5f9"}}>Groupes de seuils DEIV</div>
+              <button onClick={()=>setSeuils(prev=>({...prev, deivGroupes:[...(prev.deivGroupes||[]), {id:"grp_"+Date.now(), nom:"Nouveau groupe", deivs:[], total:{leger:0,moyen:0}, cats:{}}]}))}
+                style={{background:"#22c55e",color:"#fff",border:"none",borderRadius:7,padding:"5px 12px",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>+ Nouveau groupe</button>
+            </div>
+            <div style={{fontSize:10,color:"#7a90aa",marginBottom:10,fontStyle:"italic"}}>Chaque groupe applique ses seuils (par categorie + total) aux DEIV qui lui sont ajoutes. Un DEIV hors groupe garde les seuils globaux ci-dessus.</div>
+            {((seuils.deivGroupes)||[]).length===0 && <div style={{fontSize:11,color:"#5a7090"}}>Aucun groupe. Cliquez « + Nouveau groupe ».</div>}
+            {((seuils.deivGroupes)||[]).map((g,gi)=>{
+              const upd=(patch)=>setSeuils(prev=>({...prev,deivGroupes:(prev.deivGroupes||[]).map((x,i2)=>i2===gi?{...x,...patch}:x)}));
+              const updCat=(cat,key,val)=>setSeuils(prev=>({...prev,deivGroupes:(prev.deivGroupes||[]).map((x,i2)=>i2===gi?{...x,cats:{...(x.cats||{}),[cat]:{...((x.cats||{})[cat]||{}),[key]:parseInt(val)||0}}}:x)}));
+              const deivPostes=postes.filter(pp=>pp.type==="DEIV");
+              return (
+                <div key={g.id||gi} style={{border:"1px solid #3d5270",borderRadius:8,padding:"10px 12px",marginBottom:10}}>
+                  <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:8}}>
+                    <input value={g.nom||""} onChange={e=>upd({nom:e.target.value})} placeholder="Nom du groupe" style={{...inpStyle,flex:1,fontWeight:700}}/>
+                    <button onClick={()=>setSeuils(prev=>({...prev,deivGroupes:(prev.deivGroupes||[]).filter((x,i2)=>i2!==gi)}))} style={{background:"#ef444422",color:"#ef4444",border:"1px solid #ef444433",borderRadius:5,padding:"4px 8px",fontSize:10,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Supprimer</button>
+                  </div>
+                  <div style={{fontSize:9,color:"#7a90aa",marginBottom:4}}>DEIV du groupe ({(g.deivs||[]).length})</div>
+                  <div style={{display:"flex",gap:4,flexWrap:"wrap",marginBottom:8,maxHeight:110,overflowY:"auto"}}>
+                    {deivPostes.map(dp=>{
+                      const on=(g.deivs||[]).indexOf(dp.id)>=0;
+                      return <button key={dp.id} onClick={()=>upd({deivs: on?(g.deivs||[]).filter(x=>x!==dp.id):[...(g.deivs||[]),dp.id]})}
+                        style={{background:on?"#3b82f622":"transparent",color:on?"#3b82f6":"#7a90aa",border:"1px solid "+(on?"#3b82f6":"#3d5270"),borderRadius:14,padding:"2px 8px",fontSize:10,fontWeight:on?700:500,cursor:"pointer",fontFamily:"inherit"}}>{dp.id}</button>;
+                    })}
+                  </div>
+                  <div style={{display:"flex",gap:10,alignItems:"flex-end",marginBottom:8}}>
+                    <div><div style={{fontSize:9,color:"#c084fc",fontWeight:700,marginBottom:2}}>TOTAL — Orange min</div>
+                      <input type="number" min="0" value={(g.total||{}).leger||0} onChange={e=>upd({total:{...(g.total||{}),leger:parseInt(e.target.value)||0}})} style={{...inpStyle,width:70}}/></div>
+                    <div><div style={{fontSize:9,color:"#c084fc",fontWeight:700,marginBottom:2}}>TOTAL — Rouge min</div>
+                      <input type="number" min="0" value={(g.total||{}).moyen||0} onChange={e=>upd({total:{...(g.total||{}),moyen:parseInt(e.target.value)||0}})} style={{...inpStyle,width:70}}/></div>
+                  </div>
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(150px,1fr))",gap:6}}>
+                    {CATS_IV.map(cat=>(
+                      <div key={cat} style={{background:"#1a2540",borderRadius:6,padding:"6px 8px"}}>
+                        <div style={{fontSize:10,color:"#94a3b8",marginBottom:4}}>{cat}</div>
+                        <div style={{display:"flex",gap:6}}>
+                          <input type="number" min="0" title="Orange min" value={((g.cats||{})[cat]||{}).leger||0} onChange={e=>updCat(cat,"leger",e.target.value)} style={{...inpStyle,fontSize:11,padding:"3px 6px",width:52}}/>
+                          <input type="number" min="0" title="Rouge min" value={((g.cats||{})[cat]||{}).moyen||0} onChange={e=>updCat(cat,"moyen",e.target.value)} style={{...inpStyle,fontSize:11,padding:"3px 6px",width:52}}/>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
           </Card>
           <Card>
             <div style={{fontSize:14,fontWeight:700,color:"#f1f5f9",marginBottom:14}}>Seuils IPS</div>
@@ -7910,7 +8226,7 @@ function SaisiePassage({ seuilsGlobaux, setSeuilsGlobaux, setReinterventions, se
                           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(160px,1fr))",gap:6}}>
                             {CATS_IV.map(cat=>{
                               const v = parseInt(s["iv_"+cat]||0);
-                              const sv = seuils.iv[cat]||{leger:999,moyen:9999};
+                              const sv = (((groupeDeivPour(p,seuils)||{}).cats)||seuils.iv||{})[cat]||{leger:999,moyen:9999};
                               const col = v>=sv.moyen?"#ef4444":v>=sv.leger?"#f59e0b":"#22c55e";
                               return (
                                 <div key={cat} style={{display:"flex",alignItems:"center",gap:6,background:"#1a2540",borderRadius:6,padding:"5px 8px"}}>
@@ -7983,7 +8299,7 @@ function SaisiePassage({ seuilsGlobaux, setSeuilsGlobaux, setReinterventions, se
           ...postes.filter(p=>(p.nuisible||"Rongeurs")==="Rongeurs").map(p=>p.molecule_actuelle).filter(Boolean),
           ...passagesData.flatMap(pa=>{ const s=typeof pa.saisies==="string"?JSON.parse(pa.saisies||"{}"):pa.saisies||{}; return Object.values(s).map(x=>x?.molecule).filter(Boolean); })
         ])];
-        const getMolColor = mol => { if(!mol)return "#3d5270"; if(mol==="Placebo")return "#3b82f6"; const others=allMols.filter(m=>m!=="Placebo"); const idx=others.indexOf(mol); return idx>=0?MOL_COLORS[idx%MOL_COLORS.length]:"#7a90aa"; };
+        const getMolColor = mol => { if(!mol)return "#3d5270"; if(mol==="Placebo")return "#3b82f6"; if(/^dif/i.test(mol))return "#f59e0b"; if(/^brod/i.test(mol))return "#ef4444"; const others=allMols.filter(m=>m!=="Placebo"&&!/^dif/i.test(m)&&!/^brod/i.test(m)); const idx=others.indexOf(mol); return idx>=0?MOL_COLORS[idx%MOL_COLORS.length]:"#7a90aa"; };
 
         // Tri naturel des postes : RE1,RE2,...RE10,RE11 puis RI1,...
         function sortNaturel(arr) {
@@ -7996,7 +8312,9 @@ function SaisiePassage({ seuilsGlobaux, setSeuilsGlobaux, setReinterventions, se
 
         const filterType = filterTypeMol;
         const setFilterType = setFilterTypeMol;
-        const passages6 = [...passagesData.filter(pa=>pa.type!=="Insectes volants")].sort((a,b)=>{
+        const anneeDe = d => { const p=(d||"").split("/"); return p.length===3?p[2]:null; };
+        const anneesMol = [...new Set(passagesData.filter(pa=>pa.type!=="Insectes volants").map(pa=>anneeDe(pa.date)).filter(Boolean))].sort((a,b)=>b-a);
+        const passages6 = [...passagesData.filter(pa=>pa.type!=="Insectes volants" && (filterAnneeMol==="Toutes" || anneeDe(pa.date)===filterAnneeMol))].sort((a,b)=>{
           const pd=d=>{const p=(d||"").split("/");return p.length===3?new Date(p[2]+"-"+p[1]+"-"+p[0]):new Date(0);};
           return pd(a.date)-pd(b.date); // plus ancienne à gauche
         });
@@ -8057,6 +8375,11 @@ function SaisiePassage({ seuilsGlobaux, setSeuilsGlobaux, setReinterventions, se
                   {t==="tous"?"Tous":t==="RE"?"Ext. (RE)":"Int. (RI)"}
                 </button>
               ))}
+              <select value={filterAnneeMol} onChange={e=>setFilterAnneeMol(e.target.value)}
+                style={{background:"#1a2540",color:"#f1f5f9",border:"1px solid #3d5270",borderRadius:7,padding:"5px 10px",fontSize:11,fontFamily:"inherit",cursor:"pointer"}}>
+                <option value="Toutes">Toutes années</option>
+                {anneesMol.map(a=><option key={a} value={a}>{a}</option>)}
+              </select>
               <button onClick={exportPdf} style={{background:"#1d4ed822",color:"#3b82f6",border:"1px solid #3b82f644",borderRadius:7,padding:"5px 12px",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>📄 PDF</button>
               <button onClick={exportExcel} style={{background:"#16a34a22",color:"#22c55e",border:"1px solid #22c55e44",borderRadius:7,padding:"5px 12px",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>📊 Excel</button>
             </div>
@@ -8342,7 +8665,7 @@ function Produits() {
   async function uploadDoc(produitId, file, type) {
     if (!file) return;
     setUploading(produitId+"_"+type);
-    const path = CLIENT_CONFIG.contrat + "/produits/" + produitId + "_" + Date.now() + "_" + file.name;
+    const path = CLIENT_CONFIG.contrat + "/produits/" + produitId + "_" + Date.now() + "_" + sanitizeFileName(file.name);
     try {
       const res = await fetch(SUPABASE_URL + "/storage/v1/object/documents/" + path, {
         method:"POST",
@@ -8529,19 +8852,43 @@ function Habilitations() {
   const [form, setForm]               = useState({ nom:"", role:"Technicien", actif:true, certiphyto:false, certibiocide:false, hab_elec:false, caces:false, pack_sec:false, telephone:"", email:"", equipe:"3d" });
   const [uploading, setUploading]     = useState(null);
   const [newDocType, setNewDocType]   = useState("Certiphyto");
-  const [hiddenIds, setHiddenIds]     = useState([]);
+  const [hiddenIds, setHiddenIds]     = useState(()=>{ try { const s = localStorage.getItem("aads_hab_hidden"); const a = s?JSON.parse(s):[]; return Array.isArray(a)?a:[]; } catch(e) { return []; } });
   const [draggingId, setDraggingId]   = useState(null);
   const [showHidden, setShowHidden]   = useState(false);
+  useEffect(()=>{ try { localStorage.setItem("aads_hab_hidden", JSON.stringify(hiddenIds)); } catch(e) {} }, [hiddenIds]);
 
   const DOC_TYPES = activeEquipe === "assainissement" ? DOC_TYPES_ASSAIN : DOC_TYPES_3D;
 
+  // Ordre + masquage des techniciens : persistes EN BASE (config_logos.hab_config)
+  // pour etre partages entre appareils. localStorage reste un cache.
+  const habLoadedRef = React.useRef(false);
+  function saveHabConfig(order, hidden) {
+    var payload = { order: order, hidden: hidden };
+    sbFetch("config_logos?id=eq.main", "PATCH", { hab_config: payload }, { Prefer:"return=representation" })
+      .then(function(r){ if (!r || (Array.isArray(r) && r.length === 0)) { sbFetch("config_logos", "POST", { id:"main", hab_config: payload }, { Prefer:"resolution=merge-duplicates" }).catch(function(){}); } })
+      .catch(function(){});
+  }
+  useEffect(()=>{ if(!habLoadedRef.current) return; saveHabConfig(techniciens.map(t=>t.id), hiddenIds); }, [techniciens, hiddenIds]);
+
   useEffect(() => {
-    sbGet("habilitations").then(data => {
+    Promise.all([
+      sbGet("habilitations").catch(()=>null),   // null = echec (≠ liste vide) : on ne re-amorce pas sur un echec
+      sbFetch("config_logos?id=eq.main","GET").catch(()=>[]),
+    ]).then(([data, cfg]) => {
+      var hc = (cfg && cfg[0] && cfg[0].hab_config) || null;
+      var orderIds = (hc && Array.isArray(hc.order) && hc.order.length) ? hc.order : (function(){ try { return JSON.parse(localStorage.getItem("aads_hab_order")||"null"); } catch(e){ return null; } })();
+      if (hc && Array.isArray(hc.hidden)) { setHiddenIds(hc.hidden); try { localStorage.setItem("aads_hab_hidden", JSON.stringify(hc.hidden)); } catch(e){} }
+      // Verrou de ré-amorçage persistant : des qu on a vu des techniciens en base
+      // (ou qu on a amorce une fois), on ne ré-amorce PLUS JAMAIS. Protege contre
+      // une lecture vide transitoire (RLS/reseau) qui reecraserait toutes les equipes.
+      var SEED_KEY = "aads_hab_seeded_" + (CLIENT_CONFIG.contrat||"x");
+      var alreadySeeded = false;
+      try { alreadySeeded = localStorage.getItem(SEED_KEY) === "1"; } catch(e){}
       if (data && data.length > 0) {
+        try { localStorage.setItem(SEED_KEY, "1"); } catch(e){}   // base peuplee : verrou pose
         try {
-          const savedOrder = localStorage.getItem("aads_hab_order");
-          if (savedOrder) {
-            const order = JSON.parse(savedOrder);
+          if (orderIds && Array.isArray(orderIds)) {
+            const order = orderIds;
             const sorted = [...data].sort((a,b) => {
               const ia = order.indexOf(a.id);
               const ib = order.indexOf(b.id);
@@ -8552,10 +8899,16 @@ function Habilitations() {
             setTechniciens(data.map(h=>({...h, equipe:h.equipe||"3d"})));
           }
         } catch(e) { setTechniciens(data.map(h=>({...h, equipe:h.equipe||"3d"}))); }
-      } else {
-        HABILITATIONS.forEach(h => sbUpsert("habilitations", { id:String(h.id), contrat:CLIENT_CONFIG.contrat, nom:h.nom, role:h.role, actif:h.actif, certiphyto:h.certiphyto, certibiocide:h.certibiocide, hab_elec:h.habElec||false, caces:h.caces, pack_sec:h.packSec||false, telephone:h.telephone||"", email:h.email||"", equipe:"3d" }));
+      } else if (Array.isArray(data) && CLIENT_CONFIG.contrat && !alreadySeeded) {
+        // Ré-amorcer UNIQUEMENT si : base reellement vide (data === [] et non un echec
+        // de chargement) ET contrat resolu ET jamais amorce auparavant (verrou absent).
+        // On respecte l equipe par defaut ; on pose le verrou pour interdire toute
+        // reprise ulterieure (une base deja peuplee ne doit jamais etre reecrasee).
+        try { localStorage.setItem(SEED_KEY, "1"); } catch(e){}
+        HABILITATIONS.forEach(h => sbUpsert("habilitations", { id:String(h.id), contrat:CLIENT_CONFIG.contrat, nom:h.nom, role:h.role, actif:h.actif, certiphyto:h.certiphyto, certibiocide:h.certibiocide, hab_elec:h.habElec||false, caces:h.caces, pack_sec:h.packSec||false, telephone:h.telephone||"", email:h.email||"", equipe:h.equipe||"3d" }));
       }
-    }).catch(()=>{});
+      habLoadedRef.current = true;
+    }).catch(()=>{ habLoadedRef.current = true; });
     sbGet("habilitations_docs").then(data => {
       if (data && data.length > 0) {
         const byTech = {};
@@ -8592,7 +8945,7 @@ function Habilitations() {
   async function uploadDoc(techId, file, type) {
     if (!file) return;
     setUploading(techId+"_"+type);
-    const path = CLIENT_CONFIG.contrat + "/hab/" + techId + "_" + type.replace(/ /g,"_") + "_" + file.name;
+    const path = CLIENT_CONFIG.contrat + "/hab/" + techId + "_" + type.replace(/ /g,"_") + "_" + Date.now() + "_" + sanitizeFileName(file.name);
     try {
       const res = await fetch(SUPABASE_URL + "/storage/v1/object/documents/" + path, {
         method:"POST",
@@ -8781,11 +9134,20 @@ function Habilitations() {
               {selTech.email && <div style={{ fontSize:12, color:"#94a3b8", marginBottom:12 }}>✉ {selTech.email}</div>}
               {!selTech.telephone && !selTech.email && <div style={{ marginBottom:12 }}/>}
               <div style={{ display:"flex", flexWrap:"wrap", gap:6, marginBottom:12 }}>
-                {CERTIFS.map(c=>(
-                  <span key={c.key} style={{ fontSize:10, fontWeight:700, color:selTech[c.key]?"#22c55e":"#5a7090", background:selTech[c.key]?"#22c55e22":"#1a2540", border:"1px solid "+(selTech[c.key]?"#22c55e44":"#3d5270"), borderRadius:6, padding:"2px 8px" }}>
-                    {selTech[c.key]?"✓":""} {c.label}
-                  </span>
-                ))}
+                {CERTIFS.map(c=>{
+                  // Lien pastille <-> document : si un doc du meme type est importe,
+                  // la pastille devient cliquable (ouvre le justificatif) et affiche un trombone.
+                  const doc = selDocs.find(d => (d.type||"") === c.label);
+                  const has = selTech[c.key];
+                  return (
+                    <span key={c.key}
+                      onClick={doc ? ()=>window.open(doc.url, "_blank", "noopener") : undefined}
+                      title={doc ? ("Ouvrir le justificatif : "+doc.nom) : undefined}
+                      style={{ fontSize:10, fontWeight:700, color:has?"#22c55e":"#5a7090", background:has?"#22c55e22":"#1a2540", border:"1px solid "+(has?"#22c55e44":"#3d5270"), borderRadius:6, padding:"2px 8px", cursor:doc?"pointer":"default", textDecoration:doc?"underline":"none" }}>
+                      {has?"✓":""} {c.label} {doc?"📎":""}
+                    </span>
+                  );
+                })}
               </div>
 
               {/* Upload document */}
@@ -8842,17 +9204,34 @@ function Agrements() {
   const [form, setForm]           = useState({ type:"Certification", nom:"", statut:"Valide" });
   const [uploading, setUploading] = useState(null);
   const [sel, setSel]             = useState(null);
-  const [hiddenIds, setHiddenIds] = useState([]);
+  const [hiddenIds, setHiddenIds] = useState(()=>{ try { const s = localStorage.getItem("aads_agrements_hidden"); const a = s?JSON.parse(s):[]; return Array.isArray(a)?a:[]; } catch(e) { return []; } });
   const [draggingId, setDraggingId] = useState(null);
   const [showHidden, setShowHidden] = useState(false);
+  useEffect(()=>{ try { localStorage.setItem("aads_agrements_hidden", JSON.stringify(hiddenIds)); } catch(e) {} }, [hiddenIds]);
+
+  // Ordre + masquage des agrements : persistes EN BASE (config_logos.agr_config)
+  // pour etre partages entre appareils. localStorage reste un cache.
+  const agrLoadedRef = React.useRef(false);
+  function saveAgrConfig(order, hidden) {
+    var payload = { order: order, hidden: hidden };
+    sbFetch("config_logos?id=eq.main", "PATCH", { agr_config: payload }, { Prefer:"return=representation" })
+      .then(function(r){ if (!r || (Array.isArray(r) && r.length === 0)) { sbFetch("config_logos", "POST", { id:"main", agr_config: payload }, { Prefer:"resolution=merge-duplicates" }).catch(function(){}); } })
+      .catch(function(){});
+  }
+  useEffect(()=>{ if(!agrLoadedRef.current) return; saveAgrConfig(agrements.map(a=>a.id), hiddenIds); }, [agrements, hiddenIds]);
 
   useEffect(() => {
-    sbGet("agrements").then(data => {
+    Promise.all([
+      sbGet("agrements").catch(()=>[]),
+      sbFetch("config_logos?id=eq.main","GET").catch(()=>[]),
+    ]).then(([data, cfg]) => {
+      var ac = (cfg && cfg[0] && cfg[0].agr_config) || null;
+      var orderIds = (ac && Array.isArray(ac.order) && ac.order.length) ? ac.order : (function(){ try { return JSON.parse(localStorage.getItem("aads_agr_order")||"null"); } catch(e){ return null; } })();
+      if (ac && Array.isArray(ac.hidden)) { setHiddenIds(ac.hidden); try { localStorage.setItem("aads_agrements_hidden", JSON.stringify(ac.hidden)); } catch(e){} }
       if (data && data.length > 0) {
         try {
-          const savedOrder = localStorage.getItem("aads_agr_order");
-          if (savedOrder) {
-            const order = JSON.parse(savedOrder);
+          if (orderIds && Array.isArray(orderIds)) {
+            const order = orderIds;
             const sorted = [...data].sort((a,b) => {
               const ia = order.indexOf(a.id);
               const ib = order.indexOf(b.id);
@@ -8864,7 +9243,8 @@ function Agrements() {
           }
         } catch(e) { setAgrements(data); }
       } else AGREMENTS.forEach(a => sbUpsert("agrements", { id:String(a.id), contrat:CLIENT_CONFIG.contrat, type:a.type, nom:a.nom, statut:a.statut, url:"" }));
-    }).catch(()=>{});
+      agrLoadedRef.current = true;
+    }).catch(()=>{ agrLoadedRef.current = true; });
     sbGet("agrements_docs").then(data => {
       if (data && data.length > 0) {
         const byId = {};
@@ -8899,7 +9279,7 @@ function Agrements() {
   async function uploadDoc(agId, file) {
     if (!file) return;
     setUploading(agId);
-    const path = CLIENT_CONFIG.contrat + "/agrements/" + agId + "_" + Date.now() + "_" + file.name;
+    const path = CLIENT_CONFIG.contrat + "/agrements/" + agId + "_" + Date.now() + "_" + sanitizeFileName(file.name);
     try {
       const res = await fetch(SUPABASE_URL + "/storage/v1/object/documents/" + path, {
         method:"POST",
@@ -9096,7 +9476,7 @@ function ContratDevis() {
   async function uploadDoc(docId, file) {
     if (!file) return;
     setUploading(docId);
-    const path = CLIENT_CONFIG.contrat + "/contrats/" + docId + "_" + file.name;
+    const path = CLIENT_CONFIG.contrat + "/contrats/" + docId + "_" + Date.now() + "_" + sanitizeFileName(file.name);
     try {
       const res = await fetch(SUPABASE_URL + "/storage/v1/object/documents/" + path, {
         method:"POST",
@@ -9106,6 +9486,7 @@ function ContratDevis() {
       if (res.ok) {
         const url = SUPABASE_URL + "/storage/v1/object/public/documents/" + path;
         setDocs(prev => prev.map(d => d.id===docId ? {...d, url_doc:url} : d));
+        sbUpdate("contrats_devis", docId, { url_doc:url });   // persistance en base (sinon perdu au rechargement)
       }
     } catch(e) { console.error(e); }
     setUploading(null);
@@ -10914,7 +11295,7 @@ function Desinsectisation() {
 }
 
 function GestionPostes({ postes, setPostes }) {
-  const STATUTS_POSTES = ["Actif", "Disparu", "Inaccessible", "Abimé"];
+  const STATUTS_POSTES = ["Actif", "Disparu", "Inaccessible", "Abimé", "Désactivé"];
   const NUISIBLES_P  = ["Rongeurs","Blattes","Insectes volants","Teignes","IPS"];
   const [search, setSearch]         = useState("");
   const [filterMacro, setFilterMacro] = useState("Toutes");
@@ -10924,35 +11305,72 @@ function GestionPostes({ postes, setPostes }) {
   const [editId, setEditId]         = useState(null);
   const [editData, setEditData]     = useState({});
   const [prevPostes, setPrevPostes] = useState(null);
-  const [macrosList, setMacrosList] = useState(MACROS);
+  const [macrosList, setMacrosList] = useState(()=>{ try { const s = window.localStorage.getItem("aads_macros_list"); const a = s?JSON.parse(s):null; return (Array.isArray(a)&&a.length)?a:MACROS; } catch(e) { return MACROS; } });
   const [newMacroInput, setNewMacroInput] = useState("");
-  const [typesList, setTypesList] = useState(["RE", "RI", "DEIV", "PIV", "PC", "Autre"]);
+  const [typesList, setTypesList] = useState(()=>{ try { const s = window.localStorage.getItem("aads_types_list"); const a = s?JSON.parse(s):null; return (Array.isArray(a)&&a.length)?a:["RE","RI","DEIV","PIV","PC","Autre"]; } catch(e) { return ["RE","RI","DEIV","PIV","PC","Autre"]; } });
   const [newTypeInput, setNewTypeInput] = useState("");
+  const APPATS_DEFAUT = ["Placebo","Toxique","Capture mécanique","Capture glu","Multicapture","Electrique"];
+  const [appatsList, setAppatsList] = useState(()=>{ try { const s = window.localStorage.getItem("aads_appats_list"); const a = s?JSON.parse(s):null; return (Array.isArray(a)&&a.length)?a:APPATS_DEFAUT; } catch(e) { return APPATS_DEFAUT; } });
+  const [newAppatInput, setNewAppatInput] = useState("");
+  useEffect(()=>{ try { window.localStorage.setItem("aads_appats_list", JSON.stringify(appatsList)); } catch(e) {} }, [appatsList]);
   const [showManageLists, setShowManageLists] = useState(false);
+  useEffect(()=>{ try { window.localStorage.setItem("aads_macros_list", JSON.stringify(macrosList)); } catch(e) {} }, [macrosList]);
+  useEffect(()=>{ try { window.localStorage.setItem("aads_types_list", JSON.stringify(typesList)); } catch(e) {} }, [typesList]);
+  // Persistance en base (partagee entre appareils/techniciens) des listes macro/types.
+  function saveListesPostes(macros, types, appats) {
+    var payload = { macros: macros, types: types, appats: (appats || appatsList) };
+    sbFetch("config_logos?id=eq.main", "PATCH", { listes_postes: payload }, { Prefer:"return=representation" })
+      .then(function(r){ if (!r || (Array.isArray(r) && r.length === 0)) { sbFetch("config_logos", "POST", { id:"main", listes_postes: payload }, { Prefer:"resolution=merge-duplicates" }).catch(function(){}); } })
+      .catch(function(){});
+  }
+  useEffect(function(){
+    sbFetch("config_logos?id=eq.main","GET").then(function(data){
+      if (data && data.length>0 && data[0].listes_postes) {
+        var lp = data[0].listes_postes;
+        if (lp && Array.isArray(lp.macros) && lp.macros.length) { setMacrosList(lp.macros); try { window.localStorage.setItem("aads_macros_list", JSON.stringify(lp.macros)); } catch(e){} }
+        if (lp && Array.isArray(lp.types) && lp.types.length) { setTypesList(lp.types); try { window.localStorage.setItem("aads_types_list", JSON.stringify(lp.types)); } catch(e){} }
+        if (lp && Array.isArray(lp.appats) && lp.appats.length) { setAppatsList(lp.appats); try { window.localStorage.setItem("aads_appats_list", JSON.stringify(lp.appats)); } catch(e){} }
+      }
+    }).catch(function(){});
+  }, []);
+  function addAppat(value) {
+    const v = (value||"").trim();
+    if (!v || appatsList.includes(v)) { setNewAppatInput(""); return; }
+    const next = [...appatsList, v];
+    setAppatsList(next); saveListesPostes(macrosList, typesList, next); setNewAppatInput("");
+  }
+  function removeAppat(v) {
+    const next = appatsList.filter(a=>a!==v);
+    setAppatsList(next); saveListesPostes(macrosList, typesList, next);
+  }
 
   function addMacro(value, applyTo) {
     const v = value.trim();
     if (!v || macrosList.includes(v)) return;
-    setMacrosList(prev => [...prev.filter(m=>m!=="Autres"), v, "Autres"]);
+    const next = [...macrosList.filter(m=>m!=="Autres"), v, "Autres"];
+    setMacrosList(next); saveListesPostes(next, typesList);
     if (applyTo === "new") setNewP(p=>({...p, macro:v}));
     if (applyTo === "edit") setEditData(d=>({...d, macro:v}));
     setNewMacroInput("");
   }
   function removeMacro(v) {
     if (!window.confirm("Supprimer \""+v+"\" de la liste des macro-zones ?")) return;
-    setMacrosList(prev => prev.filter(m=>m!==v));
+    const next = macrosList.filter(m=>m!==v);
+    setMacrosList(next); saveListesPostes(next, typesList);
   }
   function addType(value, applyTo) {
     const v = value.trim();
     if (!v || typesList.includes(v)) return;
-    setTypesList(prev => [...prev.filter(t=>t!=="Autre"), v, "Autre"]);
+    const next = [...typesList.filter(t=>t!=="Autre"), v, "Autre"];
+    setTypesList(next); saveListesPostes(macrosList, next);
     if (applyTo === "new") setNewP(p=>({...p, type:v}));
     if (applyTo === "edit") setEditData(d=>({...d, type:v}));
     setNewTypeInput("");
   }
   function removeType(v) {
     if (!window.confirm("Supprimer \""+v+"\" de la liste des types ?")) return;
-    setTypesList(prev => prev.filter(t=>t!==v));
+    const next = typesList.filter(t=>t!==v);
+    setTypesList(next); saveListesPostes(macrosList, next);
   }
 
   function addPoste() {
@@ -10968,8 +11386,12 @@ function GestionPostes({ postes, setPostes }) {
   function startEdit(p) { setEditId(p.id); setEditData({...p}); }
   function saveEdit() {
     setPrevPostes(postes);
-    setPostes(prev=>prev.map(p=>p.id===editId?{...editData}:p));
-    sbUpdate("postes",editId,editData);
+    setPostes(prev=>prev.map(p=>p.id===editId?{...p, ...editData}:p));
+    // On n envoie que les colonnes reelles de la table (evite un 400 sur un champ calcule).
+    const clean = { id:editData.id, zone:editData.zone||"", macro:editData.macro||"", type:editData.type||"",
+      nuisible:editData.nuisible||"Rongeurs", appat:editData.appat||"", statut:editData.statut||"Actif",
+      produit_nu:!!editData.produit_nu, nature:editData.nature||"" };
+    sbUpdate("postes",editId,clean);
     setEditId(null);
   }
   function deletePoste(id) {
@@ -10984,6 +11406,11 @@ function GestionPostes({ postes, setPostes }) {
   function sortPostesNat(list) {
     const TYPE_ORDER = { "RE": 0, "RI": 1 };
     return list.slice().sort((a,b)=>{
+      const oa = (a.ordre===undefined||a.ordre===null||a.ordre==="") ? null : Number(a.ordre);
+      const ob = (b.ordre===undefined||b.ordre===null||b.ordre==="") ? null : Number(b.ordre);
+      if (oa!==null && ob!==null) { if (oa!==ob) return oa - ob; }
+      else if (oa!==null) return -1;
+      else if (ob!==null) return 1;
       const ta = TYPE_ORDER[a.type] !== undefined ? TYPE_ORDER[a.type] : 99;
       const tb = TYPE_ORDER[b.type] !== undefined ? TYPE_ORDER[b.type] : 99;
       if (ta !== tb) return ta - tb;
@@ -10996,6 +11423,25 @@ function GestionPostes({ postes, setPostes }) {
       if(an!==bn)return an-bn;
       return as_.localeCompare(bs);
     });
+  }
+
+  const dragId = useRef(null);
+  const [dragOverId, setDragOverId] = useState(null);
+  const reorderActif = !search && filterNuisible === "Tous";
+
+  function onDropReorder(targetId) {
+    var src = dragId.current;
+    dragId.current = null;
+    setDragOverId(null);
+    if (!src || src === targetId) return;
+    var order = sortPostesNat(postes).map(function(p){ return p.id; });
+    var from = order.indexOf(src), to = order.indexOf(targetId);
+    if (from < 0 || to < 0) return;
+    order.splice(to, 0, order.splice(from, 1)[0]);
+    var ordreMap = {}; order.forEach(function(id, i){ ordreMap[id] = i; });
+    setPostes(function(prev){ return prev.map(function(p){ return { ...p, ordre: (ordreMap[p.id] !== undefined ? ordreMap[p.id] : p.ordre) }; }); });
+    var payload = order.map(function(id, i){ return { id: id, ordre: i, contrat: CLIENT_CONFIG.contrat }; });
+    sbUpsert("postes", payload);
   }
 
   const filtered = sortPostesNat(postes.filter(p => {
@@ -11060,6 +11506,21 @@ function GestionPostes({ postes, setPostes }) {
                 <button onClick={()=>addType(newTypeInput)} style={{background:"#22c55e",color:"#fff",border:"none",borderRadius:6,padding:"5px 10px",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>+</button>
               </div>
             </div>
+            <div>
+              <div style={{fontSize:10,color:"#22c55e",fontWeight:700,marginBottom:6,textTransform:"uppercase"}}>Capture / appâts</div>
+              <div style={{display:"flex",flexWrap:"wrap",gap:5,marginBottom:8}}>
+                {appatsList.map(a=>(
+                  <span key={a} style={{display:"flex",alignItems:"center",gap:4,background:"#243352",border:"1px solid #3d5270",borderRadius:6,padding:"3px 8px",fontSize:11,color:"#f1f5f9"}}>
+                    {a}
+                    <button onClick={()=>removeAppat(a)} style={{background:"transparent",border:"none",color:"#ef4444",cursor:"pointer",fontSize:10,padding:0,lineHeight:1}}>✕</button>
+                  </span>
+                ))}
+              </div>
+              <div style={{display:"flex",gap:4}}>
+                <input value={newAppatInput} onChange={e=>setNewAppatInput(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"){addAppat(newAppatInput);}}} placeholder="Nouvel appât / capture..." style={{...inpS,flex:1}}/>
+                <button onClick={()=>addAppat(newAppatInput)} style={{background:"#22c55e",color:"#fff",border:"none",borderRadius:6,padding:"5px 10px",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>+</button>
+              </div>
+            </div>
           </div>
         </Card>
       )}
@@ -11084,7 +11545,19 @@ function GestionPostes({ postes, setPostes }) {
             </div>
             <div><label style={{fontSize:9,color:"#7a90aa",display:"block",marginBottom:2}}>Nuisible</label>
               <select value={newP.nuisible} onChange={e=>setNewP(p=>({...p,nuisible:e.target.value}))} style={inpS}>{NUISIBLES_P.map(n=><option key={n}>{n}</option>)}</select></div>
-            <div><label style={{fontSize:9,color:"#7a90aa",display:"block",marginBottom:2}}>Appât</label><input value={newP.appat} onChange={e=>setNewP(p=>({...p,appat:e.target.value}))} style={inpS}/></div>
+            <div><label style={{fontSize:9,color:"#7a90aa",display:"block",marginBottom:2}}>Capture / appât</label>
+              <select value={newP.appat||""} onChange={e=>setNewP(p=>({...p,appat:e.target.value}))} style={inpS}>
+                <option value="">—</option>
+                {appatsList.map(a=><option key={a} value={a}>{a}</option>)}
+              </select></div>
+            <div><label style={{fontSize:9,color:"#7a90aa",display:"block",marginBottom:2}}>Produit nu</label>
+              <div style={{padding:"5px 0"}}><input type="checkbox" checked={!!newP.produit_nu} onChange={e=>setNewP(p=>({...p,produit_nu:e.target.checked}))} style={{width:16,height:16,cursor:"pointer"}}/></div></div>
+            {((newP.type==="DEIV")||(newP.nuisible==="Insectes volants")) && (
+              <div><label style={{fontSize:9,color:"#7a90aa",display:"block",marginBottom:2}}>Nature (DEIV)</label>
+                <select value={newP.nature||""} onChange={e=>setNewP(p=>({...p,nature:e.target.value}))} style={inpS}>
+                  <option value="">—</option><option value="Destructeur">Destructeur</option><option value="Monitoring">Monitoring</option>
+                </select></div>
+            )}
             <div><label style={{fontSize:9,color:"#7a90aa",display:"block",marginBottom:2}}>Statut</label><select value={newP.statut||"Actif"} onChange={e=>setNewP(p=>({...p,statut:e.target.value}))} style={inpS}>{STATUTS_POSTES.map(s=><option key={s}>{s}</option>)}</select></div>
           </div>
           <div style={{display:"flex",gap:6}}>
@@ -11102,13 +11575,21 @@ function GestionPostes({ postes, setPostes }) {
         </select>
         <span style={{fontSize:11,color:"#5a7090",alignSelf:"center"}}>{filtered.length} postes</span>
       </div>
+      <div style={{fontSize:10,color:"#5a7090",marginBottom:6,fontStyle:"italic"}}>{reorderActif ? "Glisser une ligne pour reordonner les postes. L ordre est enregistre pour tous." : "Retire la recherche et le filtre nuisible pour pouvoir reordonner par glisser-deposer."}</div>
       <Card style={{padding:0,overflow:"hidden"}}>
-        <div style={{background:"#1a2540",padding:"8px 14px",display:"grid",gridTemplateColumns:"70px 1fr 110px 70px 80px 70px 80px 80px",gap:8,fontSize:9,fontWeight:700,color:"#7a90aa",textTransform:"uppercase"}}>
-          <div>N°</div><div>Zone</div><div>Macro</div><div>Type</div><div>Nuisible</div><div>Capture</div><div>Statut</div><div>Actions</div>
+        <div style={{background:"#1a2540",padding:"8px 14px",display:"grid",gridTemplateColumns:"64px 1fr 88px 52px 74px 104px 58px 86px 70px 66px",gap:8,fontSize:9,fontWeight:700,color:"#7a90aa",textTransform:"uppercase"}}>
+          <div>N°</div><div>Zone</div><div>Macro</div><div>Type</div><div>Nuisible</div><div>Capture</div><div>Produit nu</div><div>Nature</div><div>Statut</div><div>Actions</div>
         </div>
         <div style={{maxHeight:400,overflowY:"auto"}}>
           {filtered.map((p,i)=>(
-            <div key={p.id} style={{padding:"7px 14px",display:"grid",gridTemplateColumns:"70px 1fr 110px 70px 80px 70px 80px 80px",gap:8,alignItems:"center",borderTop:"1px solid #243352",background:i%2===0?"transparent":"#ffffff04"}}>
+            <div key={p.id}
+              draggable={reorderActif && editId!==p.id}
+              onDragStart={e=>{ dragId.current = p.id; e.dataTransfer.effectAllowed = "move"; }}
+              onDragOver={e=>{ if(!reorderActif){return;} e.preventDefault(); if(dragOverId!==p.id) setDragOverId(p.id); }}
+              onDragLeave={()=>{ if(dragOverId===p.id) setDragOverId(null); }}
+              onDrop={e=>{ e.preventDefault(); onDropReorder(p.id); }}
+              onDragEnd={()=>{ dragId.current=null; setDragOverId(null); }}
+              style={{padding:"7px 14px",display:"grid",gridTemplateColumns:"64px 1fr 88px 52px 74px 104px 58px 86px 70px 66px",gap:8,alignItems:"center",borderTop:dragOverId===p.id?"2px solid #3b82f6":"1px solid #243352",background:dragOverId===p.id?"#1d4ed822":(i%2===0?"transparent":"#ffffff04"),cursor:(reorderActif && editId!==p.id)?"grab":"default"}}>
               {editId===p.id ? (
                 <>
                   <input value={editData.id} onChange={e=>setEditData(d=>({...d,id:e.target.value}))} style={{...inpS,width:"100%"}}/>
@@ -11118,12 +11599,19 @@ function GestionPostes({ postes, setPostes }) {
                   <select value={editData.nuisible||""} onChange={e=>setEditData(d=>({...d,nuisible:e.target.value}))} style={inpS}>{NUISIBLES_P.map(n=><option key={n}>{n}</option>)}</select>
                   <select value={editData.appat||""} onChange={e=>setEditData(d=>({...d,appat:e.target.value}))} style={inpS}>
                     <option value="">—</option>
-                    <option value="Glue">Glue</option>
-                    <option value="Grille">Grille</option>
-                    <option value="Toxique">Toxique</option>
-                    <option value="Lumiere">Lumiere</option>
-                    <option value="Autre">Autre</option>
+                    {appatsList.map(a=><option key={a} value={a}>{a}</option>)}
+                    {editData.appat && !appatsList.includes(editData.appat) && <option value={editData.appat}>{editData.appat}</option>}
                   </select>
+                  <div style={{display:"flex",justifyContent:"center"}}>
+                    <input type="checkbox" checked={!!editData.produit_nu} onChange={e=>setEditData(d=>({...d,produit_nu:e.target.checked}))} style={{width:16,height:16,cursor:"pointer"}}/>
+                  </div>
+                  {((editData.type==="DEIV")||(editData.nuisible==="Insectes volants")) ? (
+                    <select value={editData.nature||""} onChange={e=>setEditData(d=>({...d,nature:e.target.value}))} style={inpS}>
+                      <option value="">—</option>
+                      <option value="Destructeur">Destructeur</option>
+                      <option value="Monitoring">Monitoring</option>
+                    </select>
+                  ) : <div style={{fontSize:10,color:"#5a7090",textAlign:"center"}}>—</div>}
                   <select value={editData.statut||"Actif"} onChange={e=>setEditData(d=>({...d,statut:e.target.value}))} style={inpS}>{STATUTS_POSTES.map(s=><option key={s}>{s}</option>)}</select>
                   <div style={{display:"flex",gap:4}}>
                     <button onClick={saveEdit} style={{background:"#22c55e",color:"#fff",border:"none",borderRadius:5,padding:"2px 8px",fontSize:10,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>OK</button>
@@ -11138,6 +11626,8 @@ function GestionPostes({ postes, setPostes }) {
                   <div style={{fontSize:10,color:"#7a90aa"}}>{p.type}</div>
                   <div style={{fontSize:10,color:NUISIBLE_COLORS[p.nuisible||"Rongeurs"]||"#7a90aa",fontWeight:600}}>{p.nuisible||"Rongeurs"}</div>
                   <div style={{fontSize:10,color:p.appat?"#f1f5f9":"#5a7090"}}>{p.appat||"—"}</div>
+                  <div style={{textAlign:"center",fontSize:12,color:p.produit_nu?"#22c55e":"#5a7090",fontWeight:700}}>{p.produit_nu?"✓":"—"}</div>
+                  <div style={{fontSize:10,color:p.nature?"#c084fc":"#5a7090"}}>{((p.type==="DEIV")||(p.nuisible==="Insectes volants"))?(p.nature||"—"):"—"}</div>
                   <div style={{fontSize:10,color:p.statut==="Actif"||!p.statut?"#22c55e":p.statut==="Disparu"?"#ef4444":"#f59e0b",fontWeight:600}}>{p.statut||"Actif"}</div>
                   <div style={{display:"flex",gap:4}}>
                     <button onClick={()=>startEdit(p)} style={{background:"#1d4ed822",color:"#3b82f6",border:"1px solid #3b82f644",borderRadius:5,padding:"2px 7px",fontSize:10,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Edit</button>
@@ -11714,6 +12204,16 @@ function posteLabelFontSize(label, base) {
 
 function PlanImplantation({ seuilsGlobaux }) {
   const [postes, setPostes]           = useState(POSTES_INIT.map(p=>({...p})));
+  const [pastCfg, setPastCfg] = useState({ size:PASTILLE_CONFIG.size, labelColor:PASTILLE_CONFIG.labelColor, labelSize:PASTILLE_CONFIG.labelSize, cercleSize:PASTILLE_CONFIG.cercleSize, cercleColor:PASTILLE_CONFIG.cercleColor });
+  const [savingPast, setSavingPast] = useState(false);
+  const [savedPast, setSavedPast] = useState(false);
+  async function savePastCfg() {
+    setSavingPast(true);
+    var cfg = { size:parseInt(pastCfg.size)||22, labelColor:pastCfg.labelColor||"#ffffff", labelSize:parseInt(pastCfg.labelSize)||7, cercleSize:(parseInt(pastCfg.cercleSize)||0), cercleColor:pastCfg.cercleColor||"#ffffff" };
+    PASTILLE_CONFIG.size=cfg.size; PASTILLE_CONFIG.labelColor=cfg.labelColor; PASTILLE_CONFIG.labelSize=cfg.labelSize; PASTILLE_CONFIG.cercleSize=cfg.cercleSize; PASTILLE_CONFIG.cercleColor=cfg.cercleColor;
+    await sbFetch("config_affichage", "POST", { id:"main", pastille_size:cfg.size, label_color:cfg.labelColor, label_size:cfg.labelSize, cercle_size:cfg.cercleSize, cercle_color:cfg.cercleColor }, { Prefer:"resolution=merge-duplicates" });
+    setSavingPast(false); setSavedPast(true); setTimeout(function(){ setSavedPast(false); }, 2000);
+  }
   const [passages, setPassages]       = useState([]);
   const [plans, setPlans]             = useState([]);
   const [posByPlan, setPosByPlan]     = useState({"plan-masse":[]});
@@ -11726,6 +12226,29 @@ function PlanImplantation({ seuilsGlobaux }) {
   const [showAllPlans, setShowAllPlans] = useState(false);
   const [selDate, setSelDate]         = useState(null);
   const [filterNuisibleArr, setFilterNuisibleArr] = useState([]);
+  const [imgReflow, setImgReflow] = useState(0);   // force un recalcul des pastilles quand l image est chargee
+  const planScrollRef = React.useRef(null);        // conteneur defilant du plan (reset scroll au chargement)
+  const [filterProduitNu, setFilterProduitNu] = useState("tous");   // tous | oui | non
+  const [filterNaturePlan, setFilterNaturePlan] = useState("toutes"); // toutes | Destructeur | Monitoring
+  const [filterMacroPlan, setFilterMacroPlan]   = useState([]); // [] = toutes les zones ; sinon liste de macros
+  // Un poste est visible sur le plan s il passe TOUS les filtres (cumulables).
+  function posteVisiblePlan(p) {
+    if (!p) return false;
+    if (p.statut==="Désactivé") return false;
+    if (filterProduitNu==="oui" && !p.produit_nu) return false;
+    if (filterProduitNu==="non" && p.produit_nu) return false;
+    if (filterNaturePlan!=="toutes") {
+      const estDeiv = (p.type==="DEIV")||((p.nuisible||"")==="Insectes volants");
+      if (!estDeiv || (p.nature||"")!==filterNaturePlan) return false;
+    }
+    if (filterMacroPlan.length>0 && filterMacroPlan.indexOf(p.macro||"")===-1) return false;
+    if (filterNuisibleArr.length>0) {
+      const nuisible = p.nuisible||"Rongeurs";
+      const ok = filterNuisibleArr.some(f=>{ if(f==="__RE")return posteEstExt(p); if(f==="__RI")return posteEstInt(p); return nuisible===f; });
+      if (!ok) return false;
+    }
+    return true;
+  }
   const [modeColor, setModeColor]     = useState("type");
   const [zoom, setZoom]               = useState(()=>{
     try { const saved = window.localStorage && window.localStorage.getItem("aads_plan_zoom"); return saved ? parseInt(saved) : 80; } catch(e) { return 80; }
@@ -11741,6 +12264,7 @@ function PlanImplantation({ seuilsGlobaux }) {
   const [showAddPlan, setShowAddPlan] = useState(false);
   const [newPlanLabel, setNewPlanLabel] = useState("");
   const [newPlanImg, setNewPlanImg]   = useState(null);
+  const [activePageByPlan, setActivePageByPlan] = useState({});
   const [editingPlanId, setEditingPlanId] = useState(null);
   const [editingPlanLabel, setEditingPlanLabel] = useState("");
   const [hover, setHover]             = useState(null);
@@ -11756,6 +12280,8 @@ function PlanImplantation({ seuilsGlobaux }) {
     try { const s = localStorage.getItem("aads_plan_colors"); return s ? JSON.parse(s) : {}; } catch(e) { return {}; }
   });
   const [editingPlanColor, setEditingPlanColor] = useState(null);
+  const [dragPlanId, setDragPlanId] = useState(null); // glisser-deposer des onglets plans
+  const [dragImgIdx, setDragImgIdx] = useState(null); // glisser-deposer des etages (images)
   const [showPlanActions, setShowPlanActions] = useState(false); // id du plan dont on édite la couleur
   const [nuisibleColors, setNuisibleColors] = useState(()=>{
     try { const s = localStorage.getItem("aads_nuisible_colors"); return s ? {...NUISIBLE_COLORS,...JSON.parse(s)} : {...NUISIBLE_COLORS}; } catch(e) { return {...NUISIBLE_COLORS}; }
@@ -11830,13 +12356,13 @@ function PlanImplantation({ seuilsGlobaux }) {
       return (
         <div style={{ position:"relative", width:w, height:h, transform:scale, transition:"transform 0.05s", cursor:"grab", filter:"drop-shadow("+ombre+")" }}>
           <svg width={w} height={h} viewBox="0 0 100 90" style={{ display:"block" }}>
-            <polygon points="50,4 96,86 4,86" fill={col} stroke="#fff" strokeWidth="7" strokeLinejoin="round"/>
+            <polygon points="50,4 96,86 4,86" fill={col} stroke={PASTILLE_CONFIG.cercleColor} strokeWidth="7" strokeLinejoin="round"/>
           </svg>
           <div style={{ ...labelWrap, top:"18%" }}>{labelNode}</div>
         </div>
       );
     }
-    var st = { width:taille, height:taille, background:col, border:"2px solid #fff", boxShadow:ombre, display:"flex", alignItems:"center", justifyContent:"center", cursor:"grab", userSelect:"none", boxSizing:"border-box", transform:scale, transition:"transform 0.05s", position:"relative" };
+    var st = { width:taille, height:taille, background:col, border:(PASTILLE_CONFIG.cercleSize+"px solid "+PASTILLE_CONFIG.cercleColor), boxShadow:ombre, display:"flex", alignItems:"center", justifyContent:"center", cursor:"grab", userSelect:"none", boxSizing:"border-box", transform:scale, transition:"transform 0.05s", position:"relative" };
     if (forme === "carre") st.borderRadius = 3;
     else if (forme === "rect") { st.width = taille * 1.5; st.height = taille * 0.75; st.borderRadius = 3; }
     else if (forme === "ovale") { st.width = taille * 1.35; st.height = taille * 0.8; st.borderRadius = "50%"; }
@@ -11848,10 +12374,14 @@ function PlanImplantation({ seuilsGlobaux }) {
     sbGet("postes").then(data=>{if(data&&data.length>0)setPostes(data);}).catch(()=>{});
     sbGet("passages").then(data=>{if(data&&data.length>0){setPassages(data);setSelDate(data.sort((a,b)=>{const pd=d=>{const p=(d||"").split("/");return p.length===3?new Date(p[2]+"-"+p[1]+"-"+p[0]):new Date(0)};return pd(b.date)-pd(a.date);})[0].date);}}).catch(()=>{});
     Promise.all([
-      sbGet("plans").catch(()=>[]),
+      // Chargement RAPIDE : on ne recupere QUE les metadonnees des plans (pas les
+      // images base64, tres lourdes). Les images sont chargees a la demande quand
+      // on ouvre un plan (voir l effet plus bas). Sinon on telechargeait toutes les
+      // images de tous les plans au demarrage -> long.
+      sbFetch("plans?select=id,label,contrat,site,ordre&contrat=eq."+CLIENT_CONFIG.contrat+filtreSite("plans")+"&order=id.asc","GET").catch(()=>[]),
       sbGet("plans_dessines").catch(()=>[]),
     ]).then(([planImgs, planDessines]) => {
-      const imgPlans = (planImgs||[]).map(p=>({...p, img: p.img_url || p.img}));
+      const imgPlans = (planImgs||[]).map(p=>({ ...p, img:"", images:[], imgLoaded:false }));
       const parseEls = e => typeof e==="string" ? JSON.parse(e||"[]") : (e||[]);
       const dessines = [];
       (planDessines||[]).forEach(d=>{
@@ -11867,10 +12397,11 @@ function PlanImplantation({ seuilsGlobaux }) {
           base.img = null; // le rendu passe par la branche SVG, sinon les annotations sont masquees
           if (d.label) base.label = d.label;
         } else {
-          dessines.push({id:"dessine_"+d.id, label:d.label, img:null, dessine:true, elements: parseEls(d.elements), backgroundImg: d.background_img||null});
+          dessines.push({id:"dessine_"+d.id, label:d.label, img:null, dessine:true, elements: parseEls(d.elements), backgroundImg: d.background_img||null, ordre:d.ordre});
         }
       });
       const allPlans = [...imgPlans, ...dessines];
+      allPlans.sort(function(a,b){ var oa=(a.ordre===undefined||a.ordre===null||a.ordre==="")?9999:Number(a.ordre); var ob=(b.ordre===undefined||b.ordre===null||b.ordre==="")?9999:Number(b.ordre); return oa-ob; });
       if (allPlans.length > 0) {
         setPlans(allPlans);
         // Restaurer le plan actif sauvegardé, sinon prendre le premier
@@ -11884,11 +12415,30 @@ function PlanImplantation({ seuilsGlobaux }) {
     sbGet("poste_positions").then(data=>{
       if(data&&data.length>0){
         const byPlan={};
-        data.forEach(d=>{if(!byPlan[d.plan_id])byPlan[d.plan_id]=[];byPlan[d.plan_id].push({id:d.poste_id||d.id,x:d.x,y:d.y});});
+        data.forEach(d=>{if(!byPlan[d.plan_id])byPlan[d.plan_id]=[];byPlan[d.plan_id].push({id:d.poste_id||d.id,x:d.x,y:d.y,page:d.page||0});});
         setPosByPlan(prev=>({...prev,...byPlan}));
       }
     }).catch(()=>{});
   },[]);
+
+  // Chargement paresseux de l image du plan actif (base64 lourd) : les onglets et
+  // les pastilles s affichent tout de suite, l image arrive quand on ouvre le plan.
+  const loadedImgsRef = useRef(new Set());
+  useEffect(()=>{
+    const id = activePlan;
+    if(!id || String(id).indexOf("dessine_")===0) return;
+    if(loadedImgsRef.current.has(id)) return;
+    loadedImgsRef.current.add(id);
+    sbFetch("plans?select=id,img_url,images&id=eq."+encodeURIComponent(id)+"&contrat=eq."+CLIENT_CONFIG.contrat+filtreSite("plans"),"GET").then(rows=>{
+      const r = rows && rows[0]; if(!r) return;
+      var raw=[]; try { raw = r.images ? (typeof r.images==="string"?JSON.parse(r.images):r.images) : []; } catch(_e) { raw=[]; }
+      if(!Array.isArray(raw)) raw=[];
+      var imgs = raw.map(function(it){ return (it&&typeof it==="object")?{url:it.url||"",name:it.name||""}:{url:it||"",name:""}; }).filter(function(it){ return it.url; });
+      var first = r.img_url||"";
+      if(imgs.length===0 && first) imgs=[{url:first,name:""}];
+      setPlans(prev=>prev.map(function(p){ if(p.id!==id) return p; if(p.annote) return {...p, backgroundImg:p.backgroundImg||first, imgLoaded:true}; return {...p, images:imgs, img:(imgs[0]&&imgs[0].url)||first, imgLoaded:true}; }));
+    }).catch(function(){ loadedImgsRef.current.delete(id); });
+  },[activePlan]);
 
   function getPts(planId){return posByPlan[planId]||[];}
   function setPts(planId,pts){
@@ -11916,8 +12466,8 @@ function PlanImplantation({ seuilsGlobaux }) {
     return merged[posteId]||null;
   }
 
-  function getPosteColor(poste, date) {
-    if (modeColor==="type") {
+  function getPosteColor(poste, date, forceEtat) {
+    if (!forceEtat && modeColor==="type") {
       const nuisible = poste.nuisible||"Rongeurs";
       if (nuisible==="Rongeurs") {
         if (poste.type==="RE") return nuisibleColors["__RE"]||"#1e40af";
@@ -11926,7 +12476,7 @@ function PlanImplantation({ seuilsGlobaux }) {
       }
       return nuisibleColors[nuisible]||"#7a90aa";
     }
-    if (modeColor==="zone") {
+    if (!forceEtat && modeColor==="zone") {
       const zoneColors = {"Extérieur":"#3b82f6","Locaux techniques":"#f59e0b","Combles / Faux-plafonds":"#8b5cf6","Emballages":"#22c55e","Conditionnement":"#ef4444","Bureaux / R&D":"#06b6d4","Maintenance":"#84cc16","Stockage":"#f97316","Autres":"#7a90aa"};
       return zoneColors[poste.macro]||"#7a90aa";
     }
@@ -11956,8 +12506,8 @@ function PlanImplantation({ seuilsGlobaux }) {
     const totalCap = (parseInt(s.cap_souris||0))+(parseInt(s.cap_ratBrun||0))+(parseInt(s.cap_ratNoir||0));
     if (totalCap > 0) {
       const id = poste.id || "";
-      const isExt = /^RE/i.test(id);
-      const isInt = /^(RI|R\d|S\d)/i.test(id) && !isExt;
+      const isExt = posteEstExt(poste);
+      const isInt = posteEstInt(poste);
       if (isExt) {
         const sl = (seuilsGlobaux?.rongeursExt?.leger) ?? 1;
         const sm = (seuilsGlobaux?.rongeursExt?.moyen) ?? 3;
@@ -12039,12 +12589,12 @@ function PlanImplantation({ seuilsGlobaux }) {
       catch(_e) { saisies = {}; }
       Object.keys(saisies).forEach(id=>{ idsSaisis[id] = true; });
     });
-    let postesRelev = postes.filter(p=>idsSaisis[p.id]);
+    let postesRelev = postes.filter(p=>idsSaisis[p.id] && p.statut!=="Désactivé");
     if (postesRelev.length === 0) {
       // Repli : aucune saisie exploitable, on retombe sur le type de passage
       const hasDeiv = passagesDate.some(p=>(p.type||"")==="Insectes volants");
       const hasRongeurs = passagesDate.some(p=>(p.type||"")!=="Insectes volants");
-      postesRelev = postes.filter(p=>{
+      postesRelev = postes.filter(p=>p.statut!=="Désactivé").filter(p=>{
         const isIV = (p.nuisible||"Rongeurs")==="Insectes volants";
         if (hasDeiv && hasRongeurs) return true;
         if (hasDeiv) return isIV;
@@ -12053,7 +12603,7 @@ function PlanImplantation({ seuilsGlobaux }) {
     }
     let tot=0, part=0;
     postesRelev.forEach(p=>{
-      const col = getPosteColor(p, date);
+      const col = getPosteColor(p, date, true);
       if (col==="#ef4444") tot++;
       else if (col==="#f59e0b") part++;
     });
@@ -12085,20 +12635,22 @@ function PlanImplantation({ seuilsGlobaux }) {
     }
   }, [filterYear]);
 
-  const planPostes = getPts(activePlan);
   const activePlanData = plans.find(p=>p.id===activePlan);
-  const filteredPostes = filterNuisibleArr.length===0 ? postes : postes.filter(p => {
-    const nuisible = p.nuisible||"Rongeurs";
-    const id = p.id||"";
-    return filterNuisibleArr.some(f => {
-      if (f === "__RE") return /^RE/i.test(id);
-      if (f === "__RI") return /^(RI|R\d|S\d)/i.test(id) && !/^RE/i.test(id);
-      return nuisible === f;
-    });
-  });
+  const planImagesArr = (activePlanData && activePlanData.images && activePlanData.images.length) ? activePlanData.images : (activePlanData && activePlanData.img ? [{url:activePlanData.img, name:""}] : []);
+  const activePage = Math.min(activePageByPlan[activePlan] || 0, Math.max(0, planImagesArr.length - 1));
+  // Postes desactives : exclus du plan d implantation (pastilles + liste a placer),
+  // mais conserves en base (leur position n est pas supprimee).
+  const postesNonDesactives = postes.filter(p => p.statut !== "Désactivé");
+  const planPostes = getPts(activePlan).filter(pt => (pt.page||0) === activePage);
+  // Au chargement / changement de plan ou d etage : remet le defilement horizontal a 0
+  // (evite que le plan apparaisse decale a gauche/droite tant qu on n a pas interagi).
+  useEffect(()=>{ if(planScrollRef.current) planScrollRef.current.scrollLeft = 0; }, [activePlan, activePage, imgReflow]);
+  // Liste "a placer" : memes filtres cumulables que les pastilles.
+  const filteredPostes = postesNonDesactives.filter(p => posteVisiblePlan(p));
+  const macrosPlan = ["Toutes", ...Array.from(new Set(postesNonDesactives.map(p=>p.macro).filter(Boolean)))];
 
   // KPIs for selected date
-  const kpi = selDate ? getPassageStats(selDate) : {tot:0, part:0, ok:postes.length, total:postes.length};
+  const kpi = selDate ? getPassageStats(selDate) : {tot:0, part:0, ok:postesNonDesactives.length, total:postesNonDesactives.length};
 
   async function handlePlanClick(e) {
     const rect = e.currentTarget.getBoundingClientRect();
@@ -12110,7 +12662,7 @@ function PlanImplantation({ seuilsGlobaux }) {
       const movedId = movingPoste;
       setMovingPoste(null);
       try {
-        await savePostePosition(activePlan, movedId, parseFloat(xPct), parseFloat(yPct));
+        await savePostePosition(activePlan, movedId, parseFloat(xPct), parseFloat(yPct), activePage);
       } catch(err) {
         alert("Le deplacement du poste "+movedId+" n'a pas pu etre enregistre sur le serveur ("+(err.message||err)+"). Reessayez.");
       }
@@ -12119,11 +12671,11 @@ function PlanImplantation({ seuilsGlobaux }) {
     if (placingPoste) {
       if (getPts(activePlan).find(pt=>pt.id===placingPoste)) return;
       const placedId = placingPoste;
-      const pts = [...getPts(activePlan),{id:placedId,x:parseFloat(xPct),y:parseFloat(yPct)}];
+      const pts = [...getPts(activePlan),{id:placedId,x:parseFloat(xPct),y:parseFloat(yPct),page:activePage}];
       setPts(activePlan,pts);
       setPlacingPoste("");
       try {
-        await savePostePosition(activePlan, placedId, parseFloat(xPct), parseFloat(yPct));
+        await savePostePosition(activePlan, placedId, parseFloat(xPct), parseFloat(yPct), activePage);
       } catch(err) {
         alert("Le poste "+placedId+" n'a pas pu etre enregistre sur le serveur ("+(err.message||err)+"). Reessayez de l'ajouter.");
       }
@@ -12138,9 +12690,14 @@ function PlanImplantation({ seuilsGlobaux }) {
   function handleAddPlan() {
     const label=newPlanLabel.trim()||("Plan "+(plans.length+1));
     const id="plan-"+Date.now();
-    setPlans(prev=>[...prev,{id,label,img:newPlanImg}]);
+    const initImgs = newPlanImg?[{url:newPlanImg, name:label}]:[];
+    setPlans(prev=>[...prev,{id,label,img:newPlanImg,images:initImgs}]);
     setPosByPlan(prev=>({...prev,[id]:[]}));
+    // Ecriture du plan de base d abord (colonnes toujours presentes), puis la liste
+    // images en best-effort : si la colonne images n existe pas encore (migration non
+    // passee), le plan reste enregistre au lieu d etre rejete en entier.
     sbUpsert("plans",{id,contrat:CLIENT_CONFIG.contrat,label,img_url:newPlanImg||""});
+    sbUpdate("plans", id, {images: JSON.stringify(initImgs)});
     setNewPlanLabel("");setNewPlanImg(null);setShowAddPlan(false);
     setActivePlanPersisted(id);
   }
@@ -12148,6 +12705,121 @@ function PlanImplantation({ seuilsGlobaux }) {
   function handlePlanUpload(e) {
     const file=e.target.files[0];if(!file)return;
     const r=new FileReader();r.onload=ev=>setNewPlanImg(ev.target.result);r.readAsDataURL(file);
+  }
+
+  // Ajoute une image (page) au plan courant. Les postes deja poses ne bougent pas.
+  function normImgs(plan){
+    var src = (plan.images&&plan.images.length)?plan.images:(plan.img?[plan.img]:[]);
+    return src.map(function(it){ return (it&&typeof it==="object")?{url:it.url||"", name:it.name||""}:{url:it||"", name:""}; }).filter(function(it){ return it.url; });
+  }
+  function handleAddImageToPlan(e) {
+    const file=e.target.files[0]; if(!file){ return; }
+    const r=new FileReader();
+    r.onload=ev=>{
+      const dataUrl=ev.target.result;
+      const plan=plans.find(p=>p.id===activePlan); if(!plan) return;
+      var imgs = normImgs(plan);
+      var nm = window.prompt("Nom de ce plan (ex: RDC, Etage 1, Sous-sol) :", "Plan "+(imgs.length+1)) || ("Plan "+(imgs.length+1));
+      imgs.push({url:dataUrl, name:nm});
+      setPlans(prev=>prev.map(p=>p.id===activePlan?{...p,images:imgs,img:(imgs[0]&&imgs[0].url)||""}:p));
+      sbUpdate("plans", activePlan, { img_url:(imgs[0]&&imgs[0].url)||"" });
+      sbUpdate("plans", activePlan, { images: JSON.stringify(imgs) });
+      setActivePageByPlan(prev=>({...prev,[activePlan]:imgs.length-1}));
+    };
+    r.readAsDataURL(file);
+    e.target.value="";
+  }
+  function renameImage(idx){
+    const plan=plans.find(p=>p.id===activePlan); if(!plan) return;
+    var imgs = normImgs(plan);
+    if(!imgs[idx]) return;
+    var nm = window.prompt("Nom du plan :", imgs[idx].name||("Plan "+(idx+1)));
+    if(nm===null) return;
+    imgs[idx]={url:imgs[idx].url, name:nm};
+    setPlans(prev=>prev.map(p=>p.id===activePlan?{...p,images:imgs}:p));
+    sbUpdate("plans", activePlan, { images: JSON.stringify(imgs) });
+  }
+  function moveImage(idx, dir){
+    const plan=plans.find(p=>p.id===activePlan); if(!plan) return;
+    var imgs = normImgs(plan);
+    const j = idx+dir;
+    if(j<0||j>=imgs.length) return;
+    var tmp=imgs[idx]; imgs[idx]=imgs[j]; imgs[j]=tmp;
+    const pts = getPts(activePlan);
+    const newPts = pts.map(function(pt){ var pg=pt.page||0; if(pg===idx) return {...pt,page:j}; if(pg===j) return {...pt,page:idx}; return pt; });
+    setPlans(prev=>prev.map(p=>p.id===activePlan?{...p,images:imgs,img:(imgs[0]&&imgs[0].url)||""}:p));
+    setPts(activePlan,newPts);
+    sbUpdate("plans", activePlan, { img_url:(imgs[0]&&imgs[0].url)||"" });
+    sbUpdate("plans", activePlan, { images: JSON.stringify(imgs) });
+    newPts.forEach(function(pt){ if((pt.page||0)===idx||(pt.page||0)===j){ savePostePosition(activePlan, pt.id, pt.x, pt.y, pt.page||0).catch(function(){}); } });
+    setActivePageByPlan(prev=>({...prev,[activePlan]:j}));
+  }
+  function deleteImageFromPlan(idx){
+    const plan=plans.find(p=>p.id===activePlan); if(!plan) return;
+    var imgs = normImgs(plan);
+    if(imgs.length<=1){ alert("Un plan doit garder au moins une image. Pour tout retirer, utilisez Supprimer le plan."); return; }
+    const nm = imgs[idx].name||("Plan "+(idx+1));
+    if(!window.confirm("Supprimer le plan \""+nm+"\" et toutes les pastilles posees dessus ?")) return;
+    imgs.splice(idx,1);
+    const pts = getPts(activePlan);
+    const kept = [];
+    pts.forEach(function(pt){ var pg=pt.page||0; if(pg===idx){ sbDelete("poste_positions", activePlan+"_"+pt.id); return; } if(pg>idx){ var np={...pt,page:pg-1}; kept.push(np); savePostePosition(activePlan, np.id, np.x, np.y, np.page).catch(function(){}); } else { kept.push(pt); } });
+    setPlans(prev=>prev.map(p=>p.id===activePlan?{...p,images:imgs,img:(imgs[0]&&imgs[0].url)||""}:p));
+    setPts(activePlan,kept);
+    sbUpdate("plans", activePlan, { img_url:(imgs[0]&&imgs[0].url)||"" });
+    sbUpdate("plans", activePlan, { images: JSON.stringify(imgs) });
+    setActivePageByPlan(prev=>({...prev,[activePlan]:Math.max(0, Math.min((prev[activePlan]||0), imgs.length-1))}));
+  }
+  function movePlan(id, dir){
+    const arr = plans.slice();
+    const i = arr.findIndex(p=>p.id===id);
+    if(i<0) return;
+    const j = i+dir;
+    if(j<0||j>=arr.length) return;
+    var tmp=arr[i]; arr[i]=arr[j]; arr[j]=tmp;
+    setPlans(arr);
+    arr.forEach(function(p,k){
+      const isPureDessine = p.dessine && !p.annote && String(p.id).indexOf("dessine_")===0;
+      if(isPureDessine){ sbUpdate("plans_dessines", String(p.id).replace("dessine_",""), {ordre:k}); }
+      else { sbUpdate("plans", p.id, {ordre:k}); }
+    });
+  }
+  // Glisser-deposer : deplace le plan fromId a la place de toId.
+  function reorderPlanTo(fromId, toId){
+    if(!fromId || fromId===toId) return;
+    const arr = plans.slice();
+    const from = arr.findIndex(p=>p.id===fromId);
+    const to = arr.findIndex(p=>p.id===toId);
+    if(from<0||to<0) return;
+    const moved = arr.splice(from,1)[0];
+    arr.splice(to,0,moved);
+    setPlans(arr);
+    arr.forEach(function(p,k){
+      const isPureDessine = p.dessine && !p.annote && String(p.id).indexOf("dessine_")===0;
+      if(isPureDessine){ sbUpdate("plans_dessines", String(p.id).replace("dessine_",""), {ordre:k}); }
+      else { sbUpdate("plans", p.id, {ordre:k}); }
+    });
+  }
+  // Glisser-deposer : deplace l etage fromIdx a la place de toIdx (les pastilles suivent).
+  function reorderImageTo(fromIdx, toIdx){
+    if(fromIdx===null||fromIdx===toIdx) return;
+    const plan=plans.find(p=>p.id===activePlan); if(!plan) return;
+    var imgs = normImgs(plan);
+    const n = imgs.length;
+    if(fromIdx<0||fromIdx>=n||toIdx<0||toIdx>=n) return;
+    const idxOrder=[]; for(var k=0;k<n;k++) idxOrder.push(k);
+    const m = idxOrder.splice(fromIdx,1)[0];
+    idxOrder.splice(toIdx,0,m);
+    const oldToNew={}; idxOrder.forEach(function(oldI,newI){ oldToNew[oldI]=newI; });
+    const newImgs = idxOrder.map(function(oldI){ return imgs[oldI]; });
+    const pts = getPts(activePlan);
+    const newPts = pts.map(function(pt){ var pg=pt.page||0; return {...pt, page:(oldToNew[pg]!==undefined?oldToNew[pg]:pg)}; });
+    setPlans(prev=>prev.map(p=>p.id===activePlan?{...p,images:newImgs,img:(newImgs[0]&&newImgs[0].url)||""}:p));
+    setPts(activePlan,newPts);
+    sbUpdate("plans", activePlan, { img_url:(newImgs[0]&&newImgs[0].url)||"" });
+    sbUpdate("plans", activePlan, { images: JSON.stringify(newImgs) });
+    newPts.forEach(function(pt){ var old = pts.find(function(o){return o.id===pt.id;}); if(old && (old.page||0)!==(pt.page||0)){ savePostePosition(activePlan, pt.id, pt.x, pt.y, pt.page||0).catch(function(){}); } });
+    setActivePageByPlan(prev=>({...prev,[activePlan]:toIdx}));
   }
 
   function deletePlan(id) {
@@ -12179,10 +12851,14 @@ function PlanImplantation({ seuilsGlobaux }) {
     setEditingPlanId(null);
   }
 
-  function exportPlanPdf() {
+  function exportPlanPdf(pageIdxArg) {
     const activePlanData2 = plans.find(p=>p.id===activePlan);
     if (!activePlanData2) { alert("Aucun plan a exporter"); return; }
-    const pts = getPts(activePlan);
+    const pageIdx = (typeof pageIdxArg==="number") ? pageIdxArg : activePage;
+    const imgsArr = (activePlanData2.images&&activePlanData2.images.length)?activePlanData2.images.map(function(it){return (it&&typeof it==="object")?{url:it.url||"",name:it.name||""}:{url:it||"",name:""};}):(activePlanData2.img?[{url:activePlanData2.img,name:""}]:[]);
+    const curImg = imgsArr[pageIdx] || imgsArr[0] || null;
+    const pageName = (curImg&&curImg.name) ? curImg.name : "";
+    const pts = getPts(activePlan).filter(pt => (pt.page||0)===pageIdx);
 
     // Export pour plans dessinés (sans image PNG/JPG)
     if (!activePlanData2.img && activePlanData2.dessine) {
@@ -12197,16 +12873,16 @@ function PlanImplantation({ seuilsGlobaux }) {
       pts.forEach(pt => {
         const p = postes.find(x=>x.id===pt.id);
         if (!p) return;
-        if (filterNuisibleArr.length>0 && !filterNuisibleArr.some(f=>{const id=p.id||"";if(f==="__RE")return /^RE/i.test(id);if(f==="__RI")return /^(RI|R\d|S\d)/i.test(id)&&!/^RE/i.test(id);return (p.nuisible||"Rongeurs")===f;})) return;
+        if (!posteVisiblePlan(p)) return;   // filtres cumulables (nuisible, produit nu, nature, macro, desactive)
         const col = getPosteColor(p, selDate);
         const x = (parseFloat(pt.x)/100) * 900;
         const y = (parseFloat(pt.y)/100) * 600;
         const label = posteLabel(p.id);
         const ns = "http://www.w3.org/2000/svg";
-        svgClone.appendChild(svgPastilleForme(posteFormes[categorieForme(p)]||"rond", x, y, 12, col, ns));
+        svgClone.appendChild(svgPastilleForme(posteFormes[categorieForme(p)]||"rond", x, y, (PASTILLE_CONFIG.size/2), col, ns));
         const text = document.createElementNS(ns, "text");
-        text.setAttribute("x", x); text.setAttribute("y", y+3); text.setAttribute("font-size", posteLabelFontSize(label,8));
-        text.setAttribute("fill", "#fff"); text.setAttribute("text-anchor", "middle"); text.setAttribute("font-weight", "900");
+        text.setAttribute("x", x); text.setAttribute("y", y+3); text.setAttribute("font-size", posteLabelFontSize(label,PASTILLE_CONFIG.labelSize));
+        text.setAttribute("fill", PASTILLE_CONFIG.labelColor); text.setAttribute("text-anchor", "middle"); text.setAttribute("font-weight", "900");
         text.textContent = label;
         svgClone.appendChild(text);
       });
@@ -12227,7 +12903,7 @@ function PlanImplantation({ seuilsGlobaux }) {
       titleEl.setAttribute("x","10"); titleEl.setAttribute("y","18");
       titleEl.setAttribute("font-size","13"); titleEl.setAttribute("font-weight","bold");
       titleEl.setAttribute("fill","#0f2864"); titleEl.setAttribute("font-family","Arial,sans-serif");
-      titleEl.textContent = activePlanData2.label+" - "+CLIENT_CONFIG.nom+(selDate && modeColor!=="type"?" - "+selDate:"");
+      titleEl.textContent = activePlanData2.label+(pageName?" - "+pageName:"")+" - "+CLIENT_CONFIG.nom+(selDate && modeColor!=="type"?" - "+selDate:"");
       svgClone.insertBefore(titleEl, svgClone.firstChild);
 
       // Logo client en haut à droite dans le SVG
@@ -12262,7 +12938,7 @@ function PlanImplantation({ seuilsGlobaux }) {
       return;
     }
 
-    if (!activePlanData2.img) { alert("Aucune image à exporter"); return; }
+    if (!curImg || !curImg.url) { alert("Aucune image à exporter"); return; }
 
     const img = new Image();
     img.crossOrigin = "anonymous";
@@ -12281,19 +12957,19 @@ function PlanImplantation({ seuilsGlobaux }) {
       pts.forEach(pt => {
         const p = postes.find(x=>x.id===pt.id);
         if (!p) return;
-        if (filterNuisibleArr.length>0 && !filterNuisibleArr.some(f=>{const id=p.id||"";if(f==="__RE")return /^RE/i.test(id);if(f==="__RI")return /^(RI|R\d|S\d)/i.test(id)&&!/^RE/i.test(id);return (p.nuisible||"Rongeurs")===f;})) return;
+        if (!posteVisiblePlan(p)) return;   // filtres cumulables (nuisible, produit nu, nature, macro, desactive)
         const col = getPosteColor(p, selDate);
         const x = (parseFloat(pt.x)/100) * img.width;
         const y = (parseFloat(pt.y)/100) * img.height;
-        const r = 12;
+        const r = (PASTILLE_CONFIG.size/2);
 
         // Pastille (forme selon le type de poste)
         canvasPastilleForme(ctx, posteFormes[categorieForme(p)]||"rond", x, y, r, col);
 
         // Label
         const label = posteLabel(p.id);
-        ctx.fillStyle = "#fff";
-        ctx.font = "bold "+posteLabelFontSize(label,8)+"px sans-serif";
+        ctx.fillStyle = PASTILLE_CONFIG.labelColor;
+        ctx.font = "bold "+posteLabelFontSize(label,PASTILLE_CONFIG.labelSize)+"px sans-serif";
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
         ctx.fillText(label, x, y);
@@ -12327,7 +13003,7 @@ function PlanImplantation({ seuilsGlobaux }) {
       ctx.font = "bold 14px Arial,sans-serif";
       ctx.textAlign = "left";
       ctx.textBaseline = "middle";
-      ctx.fillText(activePlanData2.label+" - "+CLIENT_CONFIG.nom+(selDate && modeColor!=="type"?" - "+selDate:""), 10, 16);
+      ctx.fillText(activePlanData2.label+(pageName?" - "+pageName:"")+" - "+CLIENT_CONFIG.nom+(selDate && modeColor!=="type"?" - "+selDate:""), 10, 16);
 
       // Open in new window — avec logo client en haut à droite via HTML
       const dataUrl = canvas.toDataURL("image/png");
@@ -12339,11 +13015,17 @@ function PlanImplantation({ seuilsGlobaux }) {
       w.document.close();
       setTimeout(()=>w.print(),800);
     };
-    img.src = activePlanData2.img;
+    img.src = curImg.url;
   }
 
   function exportAllPlans() {
-    exportPlanPdf();
+    const plan = plans.find(p=>p.id===activePlan);
+    const imgsArr = (plan&&plan.images&&plan.images.length)?plan.images:[];
+    if (imgsArr.length>1) {
+      for (let i=0;i<imgsArr.length;i++) { (function(idx){ setTimeout(function(){ exportPlanPdf(idx); }, idx*1200); })(i); }
+    } else {
+      exportPlanPdf();
+    }
   }
 
   return (
@@ -12429,25 +13111,7 @@ function PlanImplantation({ seuilsGlobaux }) {
         </Card>
       )}
 
-      {/* KPIs */}
-      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10,marginBottom:14}}>
-        <div style={{background:"#243352",borderRadius:10,padding:"14px 18px",textAlign:"center"}}>
-          <div style={{fontSize:26,fontWeight:900,color:"#3b82f6"}}>{selDate ? kpi.total : postes.length}</div>
-          <div style={{fontSize:11,color:"#7a90aa",marginTop:2}}>{selDate ? "Postes contrôlés" : "Postes"}</div>
-        </div>
-        <div style={{background:"#243352",borderRadius:10,padding:"14px 18px",textAlign:"center"}}>
-          <div style={{fontSize:26,fontWeight:900,color:"#ef4444"}}>{kpi.tot}</div>
-          <div style={{fontSize:11,color:"#7a90aa",marginTop:2}}>Conso. totale</div>
-        </div>
-        <div style={{background:"#243352",borderRadius:10,padding:"14px 18px",textAlign:"center"}}>
-          <div style={{fontSize:26,fontWeight:900,color:"#f59e0b"}}>{kpi.part}</div>
-          <div style={{fontSize:11,color:"#7a90aa",marginTop:2}}>Conso. partielle</div>
-        </div>
-        <div style={{background:"#243352",borderRadius:10,padding:"14px 18px",textAlign:"center"}}>
-          <div style={{fontSize:26,fontWeight:900,color:"#22c55e"}}>{kpi.ok}</div>
-          <div style={{fontSize:11,color:"#7a90aa",marginTop:2}}>Sans activité</div>
-        </div>
-      </div>
+      {/* KPIs retires du plan d implantation a la demande */}
 
       {/* Mode couleur */}
       <div style={{display:"flex",gap:6,marginBottom:12}}>
@@ -12459,17 +13123,54 @@ function PlanImplantation({ seuilsGlobaux }) {
         ))}
       </div>
 
+      {/* Filtres supplementaires : produit nu, nature DEIV, macro-zone (cumulables avec le nuisible) */}
+      <Card style={{marginBottom:14,padding:"12px 16px"}}>
+        <div style={{fontSize:10,fontWeight:700,color:"#7a90aa",textTransform:"uppercase",letterSpacing:1,marginBottom:8}}>Filtres d affichage</div>
+        <div style={{display:"flex",gap:14,flexWrap:"wrap",alignItems:"flex-end"}}>
+          <div>
+            <div style={{fontSize:9,color:"#7a90aa",marginBottom:3}}>Produit nu</div>
+            <div style={{display:"flex",gap:5}}>
+              {[["tous","Tous"],["oui","En zone produit nu"],["non","Hors produit nu"]].map(([v,l])=>(
+                <button key={v} onClick={()=>setFilterProduitNu(v)}
+                  style={{background:filterProduitNu===v?"#22c55e22":"transparent",color:filterProduitNu===v?"#22c55e":"#7a90aa",border:"1px solid "+(filterProduitNu===v?"#22c55e":"#3d5270"),borderRadius:20,padding:"4px 12px",fontSize:11,fontWeight:filterProduitNu===v?700:500,cursor:"pointer",fontFamily:"inherit"}}>{l}</button>
+              ))}
+            </div>
+          </div>
+          <div>
+            <div style={{fontSize:9,color:"#7a90aa",marginBottom:3}}>DEIV — nature</div>
+            <div style={{display:"flex",gap:5}}>
+              {[["toutes","Tous"],["Destructeur","Destructeur"],["Monitoring","Monitoring"]].map(([v,l])=>(
+                <button key={v} onClick={()=>setFilterNaturePlan(v)}
+                  style={{background:filterNaturePlan===v?"#c084fc22":"transparent",color:filterNaturePlan===v?"#c084fc":"#7a90aa",border:"1px solid "+(filterNaturePlan===v?"#c084fc":"#3d5270"),borderRadius:20,padding:"4px 12px",fontSize:11,fontWeight:filterNaturePlan===v?700:500,cursor:"pointer",fontFamily:"inherit"}}>{l}</button>
+              ))}
+            </div>
+          </div>
+          <div>
+            <div style={{fontSize:9,color:"#7a90aa",marginBottom:3}}>Zone macro (sélection multiple)</div>
+            <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
+              <button onClick={()=>setFilterMacroPlan([])}
+                style={{background:filterMacroPlan.length===0?"#3b82f622":"transparent",color:filterMacroPlan.length===0?"#3b82f6":"#7a90aa",border:"1px solid "+(filterMacroPlan.length===0?"#3b82f6":"#3d5270"),borderRadius:20,padding:"4px 12px",fontSize:11,fontWeight:filterMacroPlan.length===0?700:500,cursor:"pointer",fontFamily:"inherit"}}>Toutes</button>
+              {macrosPlan.filter(m=>m!=="Toutes").map(m=>{
+                const on = filterMacroPlan.indexOf(m)>=0;
+                return <button key={m} onClick={()=>setFilterMacroPlan(prev=>on?prev.filter(x=>x!==m):[...prev,m])}
+                  style={{background:on?"#3b82f622":"transparent",color:on?"#3b82f6":"#7a90aa",border:"1px solid "+(on?"#3b82f6":"#3d5270"),borderRadius:20,padding:"4px 12px",fontSize:11,fontWeight:on?700:500,cursor:"pointer",fontFamily:"inherit"}}>{m}</button>;
+              })}
+            </div>
+          </div>
+        </div>
+      </Card>
+
       {/* Filtre nuisible */}
       <Card style={{marginBottom:14,padding:"12px 16px"}}>
         <div style={{fontSize:10,fontWeight:700,color:"#7a90aa",textTransform:"uppercase",letterSpacing:1,marginBottom:8}}>Filtrer par nuisible (selection multiple)</div>
         <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
           <button onClick={()=>setFilterNuisibleArr([])}
             style={{display:"flex",alignItems:"center",gap:6,background:filterNuisibleArr.length===0?"#fff":"transparent",color:filterNuisibleArr.length===0?"#1a2540":"#7a90aa",border:"1px solid "+(filterNuisibleArr.length===0?"#fff":"#3d5270"),borderRadius:20,padding:"5px 14px",fontSize:12,fontWeight:filterNuisibleArr.length===0?700:500,cursor:"pointer",fontFamily:"inherit"}}>
-            Tous ({postes.length})
+            Tous ({postesNonDesactives.length})
           </button>
           {/* Rongeurs Extérieurs */}
           {(()=>{
-            const count = postes.filter(p=>p.id&&/^RE/i.test(p.id)).length;
+            const count = postesNonDesactives.filter(p=>posteEstExt(p)).length;
             if(count===0 || nuisiblesMasques.indexOf("__RE")>=0) return null;
             const active = filterNuisibleArr.includes("__RE");
             const colRE = nuisibleColors["__RE"]||"#1e40af";
@@ -12483,7 +13184,7 @@ function PlanImplantation({ seuilsGlobaux }) {
           })()}
           {/* Rongeurs Intérieurs */}
           {(()=>{
-            const count = postes.filter(p=>p.id&&/^(RI|R\d|S\d)/i.test(p.id)&&!/^RE/i.test(p.id)).length;
+            const count = postesNonDesactives.filter(p=>posteEstInt(p)).length;
             if(count===0 || nuisiblesMasques.indexOf("__RI")>=0) return null;
             const active = filterNuisibleArr.includes("__RI");
             const colRI = nuisibleColors["__RI"]||"#60a5fa";
@@ -12499,7 +13200,7 @@ function PlanImplantation({ seuilsGlobaux }) {
             if (nuisiblesMasques.indexOf(n)>=0) return null;
             const col=nuisibleColors[n]||"#7a90aa";
             const active=filterNuisibleArr.includes(n);
-            const count=postes.filter(p=>(p.nuisible||"Rongeurs")===n).length;
+            const count=postesNonDesactives.filter(p=>(p.nuisible||"Rongeurs")===n).length;
             return (
               <button key={n} onClick={()=>setFilterNuisibleArr(prev=>active?prev.filter(x=>x!==n):[...prev,n])}
                 style={{display:"flex",alignItems:"center",gap:6,background:active?"#fff":"transparent",color:active?"#1a2540":"#7a90aa",border:"1px solid "+(active?"#fff":"#3d5270"),borderRadius:20,padding:"5px 14px",fontSize:12,fontWeight:active?700:500,cursor:"pointer",fontFamily:"inherit"}}>
@@ -12528,8 +13229,15 @@ function PlanImplantation({ seuilsGlobaux }) {
                       <button onClick={()=>setEditingPlanId(null)} style={{background:"transparent",color:"#7a90aa",border:"1px solid #3d5270",borderRadius:5,padding:"3px 6px",fontSize:11,cursor:"pointer",fontFamily:"inherit"}}>✕</button>
                     </div>
                   ) : (
-                    <div onClick={()=>{ if(isActive){ setShowPlanActions(v=>!v); } else { setActivePlanPersisted(pl.id); setShowPlanActions(true); } }}
-                      style={{display:"flex",alignItems:"center",gap:6,padding:"8px 16px",cursor:"pointer",background:isActive?"#243352":"transparent",borderRadius:"8px 8px 0 0",borderTop:isActive?"2px solid #3b82f6":"2px solid transparent",borderLeft:"1px solid "+(isActive?"#3d5270":"transparent"),borderRight:"1px solid "+(isActive?"#3d5270":"transparent"),borderBottom:"none",marginBottom:isActive?-1:0,transition:"all 0.15s"}}>
+                    <div draggable
+                      onDragStart={e=>{ setDragPlanId(pl.id); e.dataTransfer.effectAllowed="move"; try{e.dataTransfer.setData("text/plain",pl.id);}catch(_e){} }}
+                      onDragOver={e=>{ if(dragPlanId&&dragPlanId!==pl.id){ e.preventDefault(); e.dataTransfer.dropEffect="move"; } }}
+                      onDrop={e=>{ e.preventDefault(); if(dragPlanId) reorderPlanTo(dragPlanId, pl.id); setDragPlanId(null); }}
+                      onDragEnd={()=>setDragPlanId(null)}
+                      onClick={()=>{ if(isActive){ setShowPlanActions(v=>!v); } else { setActivePlanPersisted(pl.id); setShowPlanActions(false); } }}
+                      title="Glissez pour reordonner"
+                      style={{display:"flex",alignItems:"center",gap:6,padding:"8px 14px",cursor:"grab",background:isActive?"#243352":"transparent",borderRadius:"8px 8px 0 0",borderTop:isActive?"2px solid #3b82f6":"2px solid transparent",borderLeft:"1px solid "+(isActive?"#3d5270":(dragPlanId===pl.id?"#3b82f6":"transparent")),borderRight:"1px solid "+(isActive?"#3d5270":"transparent"),borderBottom:"none",marginBottom:isActive?-1:0,opacity:dragPlanId===pl.id?0.4:1,transition:"opacity 0.15s"}}>
+                      <span style={{fontSize:12,color:isActive?"#5a7090":"#41506a",cursor:"grab",lineHeight:1}}>⠿</span>
                       <span style={{fontSize:14,fontWeight:isActive?700:500,color:isActive?"#f1f5f9":"#7a90aa",whiteSpace:"nowrap"}}>{pl.label}</span>
                       {isActive && <span style={{fontSize:10,color:"#5a7090"}}>{showPlanActions?"▲":"▼"}</span>}
                     </div>
@@ -12548,191 +13256,217 @@ function PlanImplantation({ seuilsGlobaux }) {
           </div>
         </div>
 
-        {/* Barre d'actions — visible seulement si showPlanActions */}
-        {/* Barre zoom — toujours visible */}
-        <div style={{padding:"6px 14px",borderBottom:"1px solid #3d5270",background:"#1a2540",display:"flex",alignItems:"center",gap:6}}>
-          <button onClick={()=>updateZoom(Math.max(40,zoom-10))} style={{background:"#243352",color:"#7a90aa",border:"1px solid #3d5270",borderRadius:5,padding:"3px 10px",fontSize:14,cursor:"pointer",fontFamily:"inherit"}}>−</button>
-          <span style={{fontSize:11,color:"#7a90aa",minWidth:38,textAlign:"center"}}>{zoom}%</span>
-          <button onClick={()=>updateZoom(Math.min(150,zoom+10))} style={{background:"#243352",color:"#7a90aa",border:"1px solid #3d5270",borderRadius:5,padding:"3px 10px",fontSize:14,cursor:"pointer",fontFamily:"inherit"}}>+</button>
-          <button onClick={()=>updateZoom(80)} style={{background:"transparent",color:"#7a90aa",border:"1px solid #3d5270",borderRadius:5,padding:"3px 8px",fontSize:11,cursor:"pointer",fontFamily:"inherit"}}>↺</button>
+        {/* Petite barre : ouvre le panneau lateral des actions */}
+        <div style={{padding:"6px 14px",borderBottom:"1px solid #3d5270",background:"#1a2540",display:"flex",alignItems:"center",gap:8}}>
+          <button onClick={()=>{ if(!activePlan) return; setShowPlanActions(v=>!v); }} disabled={!activePlan}
+            style={{display:"flex",alignItems:"center",gap:6,background:"#243352",color:activePlan?"#cbd5e1":"#4b5b74",border:"1px solid #3d5270",borderRadius:7,padding:"5px 12px",fontSize:12,fontWeight:600,cursor:activePlan?"pointer":"default",fontFamily:"inherit"}}>
+            <span style={{fontSize:13,lineHeight:1}}>⚙</span> Actions & zoom
+          </button>
+          <span style={{fontSize:11,color:"#5a7090"}}>{zoom}%</span>
         </div>
 
-        {activePlan && showPlanActions && (          <div style={{padding:"10px 14px",borderBottom:"1px solid #3d5270",background:"#243352",display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+        {activePlan && showPlanActions && (
+          <>
+            {/* Fond cliquable pour fermer */}
+            <div onClick={()=>setShowPlanActions(false)} style={{position:"fixed",inset:0,background:"rgba(6,12,26,0.45)",zIndex:900}}/>
+            {/* Panneau lateral */}
+            <div style={{position:"fixed",top:0,right:0,height:"100vh",width:300,maxWidth:"88vw",background:"#1a2540",borderLeft:"1px solid #3d5270",boxShadow:"-8px 0 24px rgba(0,0,0,0.4)",zIndex:901,display:"flex",flexDirection:"column",fontFamily:"inherit"}}>
+              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"14px 16px",borderBottom:"1px solid #3d5270"}}>
+                <div style={{fontSize:14,fontWeight:800,color:"#f1f5f9",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{plans.find(p=>p.id===activePlan)?.label||"Plan"}</div>
+                <button onClick={()=>setShowPlanActions(false)} style={{background:"transparent",border:"none",color:"#7a90aa",fontSize:18,cursor:"pointer",fontFamily:"inherit",lineHeight:1,paddingLeft:10}}>✕</button>
+              </div>
+              <div style={{padding:16,overflowY:"auto",display:"flex",flexDirection:"column",gap:8}}>
 
-            {/* Renommer */}
-            <button onClick={()=>{setEditingPlanId(activePlan);setEditingPlanLabel(plans.find(p=>p.id===activePlan)?.label||"");}}
-              style={{background:"transparent",color:"#7a90aa",border:"1px solid #3d5270",borderRadius:6,padding:"4px 9px",fontSize:11,cursor:"pointer",fontFamily:"inherit"}}>
-              Renommer
-            </button>
-
-            {/* + Ajouter des postes */}
-            <div style={{position:"relative"}}>
-              <button onClick={()=>setShowAddPosteMenu(v=>!v)}
-                style={{background:"#1d4ed8",color:"#fff",border:"none",borderRadius:7,padding:"5px 10px",fontSize:11,fontFamily:"inherit",cursor:"pointer",fontWeight:700}}>
-                + Ajouter postes {selectedPostesToAdd.length>0?"("+selectedPostesToAdd.length+")":""}
-              </button>
-              {showAddPosteMenu && (
-                <div style={{position:"absolute",top:"110%",left:0,zIndex:200,background:"#1a2540",border:"1px solid #3d5270",borderRadius:10,padding:12,width:260,maxHeight:320,overflowY:"auto"}} onClick={e=>e.stopPropagation()}>
-                  <div style={{fontSize:11,fontWeight:700,color:"#7a90aa",marginBottom:8}}>Sélectionner les postes :</div>
-                  {filteredPostes.filter(p=>!getPts(activePlan).find(pt=>pt.id===p.id)).length===0
-                    ? <div style={{fontSize:11,color:"#5a7090",textAlign:"center",padding:10}}>Tous les postes sont déjà sur ce plan.</div>
-                    : filteredPostes.filter(p=>!getPts(activePlan).find(pt=>pt.id===p.id)).map(p=>(
-                      <label key={p.id} style={{display:"flex",alignItems:"center",gap:8,padding:"4px 0",cursor:"pointer",fontSize:11,color:selectedPostesToAdd.includes(p.id)?"#3b82f6":"#cbd5e1"}}>
-                        <input type="checkbox" checked={selectedPostesToAdd.includes(p.id)} onChange={e=>{setSelectedPostesToAdd(prev=>e.target.checked?[...prev,p.id]:prev.filter(x=>x!==p.id));}} style={{accentColor:"#3b82f6"}}/>
-                        <span style={{fontFamily:"monospace",fontWeight:700,color:"#f59e0b"}}>{p.id}</span>
-                        <span style={{color:"#7a90aa",fontSize:10}}>{(p.zone||"").slice(0,25)}</span>
-                      </label>
-                  ))}
-                  <div style={{display:"flex",gap:6,marginTop:10}}>
-                    <button onClick={async ()=>{
-                      if(selectedPostesToAdd.length===0){setShowAddPosteMenu(false);return;}
-                      const newPts = [...getPts(activePlan)];
-                      const failed = [];
-                      // Empiles en colonne serree en haut a gauche : chacun decale vers
-                      // le bas pour rester attrapable. Au-dela de la hauteur du plan on
-                      // repart sur une colonne a droite. A l utilisateur de les distribuer.
-                      const pasY = 3.2, parCol = 28;
-                      for (let i=0; i<selectedPostesToAdd.length; i++) {
-                        const id = selectedPostesToAdd[i];
-                        const colonne = Math.floor(i/parCol), rang = i%parCol;
-                        const x = parseFloat((4 + colonne*5).toFixed(2));
-                        const y = parseFloat((4 + rang*pasY).toFixed(2));
-                        newPts.push({id, x, y});
-                        try { await savePostePosition(activePlan, id, x, y); }
-                        catch(e) { failed.push({id, message: e.message||String(e)}); }
-                      }
-                      setPrevPosByPlan(posByPlan); setPts(activePlan, newPts);
-                      setSelectedPostesToAdd([]); setShowAddPosteMenu(false);
-                      if (failed.length > 0) alert("Attention : "+failed.length+" poste(s) non enregistres :\n"+failed.map(f=>f.id).join(", "));
-                    }} style={{flex:1,background:"#22c55e",color:"#fff",border:"none",borderRadius:6,padding:"6px 10px",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
-                      Ajouter {selectedPostesToAdd.length>0?"("+selectedPostesToAdd.length+")":""}
-                    </button>
-                    <button onClick={()=>{setShowAddPosteMenu(false);setSelectedPostesToAdd([]);}}
-                      style={{background:"transparent",color:"#7a90aa",border:"1px solid #3d5270",borderRadius:6,padding:"6px 10px",fontSize:11,cursor:"pointer",fontFamily:"inherit"}}>
-                      Annuler
-                    </button>
-                  </div>
+                {/* Agrandissement */}
+                <div style={{fontSize:10,fontWeight:700,color:"#5a7090",textTransform:"uppercase",letterSpacing:0.5}}>Agrandissement</div>
+                <div style={{display:"flex",alignItems:"center",gap:8}}>
+                  <button onClick={()=>updateZoom(Math.max(40,zoom-10))} style={{flex:1,background:"#243352",color:"#cbd5e1",border:"1px solid #3d5270",borderRadius:6,padding:"7px 0",fontSize:15,cursor:"pointer",fontFamily:"inherit"}}>−</button>
+                  <span style={{fontSize:13,color:"#f1f5f9",minWidth:48,textAlign:"center",fontWeight:700}}>{zoom}%</span>
+                  <button onClick={()=>updateZoom(Math.min(150,zoom+10))} style={{flex:1,background:"#243352",color:"#cbd5e1",border:"1px solid #3d5270",borderRadius:6,padding:"7px 0",fontSize:15,cursor:"pointer",fontFamily:"inherit"}}>+</button>
+                  <button onClick={()=>updateZoom(80)} title="Reinitialiser" style={{background:"#243352",color:"#cbd5e1",border:"1px solid #3d5270",borderRadius:6,padding:"7px 10px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>↺</button>
                 </div>
-              )}
+
+                <div style={{height:1,background:"#2b3b57",margin:"6px 0"}}/>
+                <div style={{fontSize:10,fontWeight:700,color:"#5a7090",textTransform:"uppercase",letterSpacing:0.5}}>Postes</div>
+
+                {/* Renommer */}
+                <button onClick={()=>{setEditingPlanId(activePlan);setEditingPlanLabel(plans.find(p=>p.id===activePlan)?.label||"");setShowPlanActions(false);}}
+                  style={{display:"flex",alignItems:"center",gap:10,width:"100%",background:"#243352",color:"#cbd5e1",border:"1px solid #3d5270",borderRadius:8,padding:"9px 12px",fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:"inherit",textAlign:"left"}}>
+                  <span style={{width:16,textAlign:"center",color:"#7a90aa"}}>✎</span> Renommer le plan
+                </button>
+
+                {/* + Ajouter des postes */}
+                <button onClick={()=>setShowAddPosteMenu(v=>!v)}
+                  style={{display:"flex",alignItems:"center",gap:10,width:"100%",background:"#243352",color:"#cbd5e1",border:"1px solid #3d5270",borderRadius:8,padding:"9px 12px",fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:"inherit",textAlign:"left"}}>
+                  <span style={{width:16,textAlign:"center",color:"#7a90aa"}}>＋</span> Ajouter des postes {selectedPostesToAdd.length>0?"("+selectedPostesToAdd.length+")":""}
+                </button>
+                {showAddPosteMenu && (
+                  <div style={{background:"#141d33",border:"1px solid #3d5270",borderRadius:8,padding:10}} onClick={e=>e.stopPropagation()}>
+                    <div style={{fontSize:11,fontWeight:700,color:"#7a90aa",marginBottom:8}}>Sélectionner les postes :</div>
+                    <div style={{maxHeight:240,overflowY:"auto"}}>
+                    {filteredPostes.filter(p=>!getPts(activePlan).find(pt=>pt.id===p.id)).length===0
+                      ? <div style={{fontSize:11,color:"#5a7090",textAlign:"center",padding:10}}>Tous les postes sont déjà sur ce plan.</div>
+                      : filteredPostes.filter(p=>!getPts(activePlan).find(pt=>pt.id===p.id)).map(p=>(
+                        <label key={p.id} style={{display:"flex",alignItems:"center",gap:8,padding:"4px 0",cursor:"pointer",fontSize:11,color:selectedPostesToAdd.includes(p.id)?"#3b82f6":"#cbd5e1"}}>
+                          <input type="checkbox" checked={selectedPostesToAdd.includes(p.id)} onChange={e=>{setSelectedPostesToAdd(prev=>e.target.checked?[...prev,p.id]:prev.filter(x=>x!==p.id));}} style={{accentColor:"#3b82f6"}}/>
+                          <span style={{fontFamily:"monospace",fontWeight:700,color:"#f59e0b"}}>{p.id}</span>
+                          <span style={{color:"#7a90aa",fontSize:10}}>{(p.zone||"").slice(0,25)}</span>
+                        </label>
+                    ))}
+                    </div>
+                    <div style={{display:"flex",gap:6,marginTop:10}}>
+                      <button onClick={async ()=>{
+                        if(selectedPostesToAdd.length===0){setShowAddPosteMenu(false);return;}
+                        const newPts = [...getPts(activePlan)];
+                        const failed = [];
+                        const pasY = 3.2, parCol = 28;
+                        for (let i=0; i<selectedPostesToAdd.length; i++) {
+                          const id = selectedPostesToAdd[i];
+                          const colonne = Math.floor(i/parCol), rang = i%parCol;
+                          const x = parseFloat((4 + colonne*5).toFixed(2));
+                          const y = parseFloat((4 + rang*pasY).toFixed(2));
+                          newPts.push({id, x, y, page: activePage});
+                          try { await savePostePosition(activePlan, id, x, y, activePage); }
+                          catch(e) { failed.push({id, message: e.message||String(e)}); }
+                        }
+                        setPrevPosByPlan(posByPlan); setPts(activePlan, newPts);
+                        setSelectedPostesToAdd([]); setShowAddPosteMenu(false);
+                        if (failed.length > 0) alert("Attention : "+failed.length+" poste(s) non enregistres :\n"+failed.map(f=>f.id).join(", "));
+                      }} style={{flex:1,background:"#22c55e",color:"#fff",border:"none",borderRadius:6,padding:"7px 10px",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+                        Ajouter {selectedPostesToAdd.length>0?"("+selectedPostesToAdd.length+")":""}
+                      </button>
+                      <button onClick={()=>{setShowAddPosteMenu(false);setSelectedPostesToAdd([]);}}
+                        style={{background:"transparent",color:"#7a90aa",border:"1px solid #3d5270",borderRadius:6,padding:"7px 10px",fontSize:11,cursor:"pointer",fontFamily:"inherit"}}>
+                        Annuler
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* + Tous les postes */}
+                <button onClick={async ()=>{
+                  const nonPlaces = filteredPostes.filter(p=>!getPts(activePlan).find(pt=>pt.id===p.id));
+                  if(nonPlaces.length===0) return;
+                  const cols = Math.ceil(Math.sqrt(nonPlaces.length));
+                  const newPts = [...getPts(activePlan)];
+                  const failed = [];
+                  for (let i=0; i<nonPlaces.length; i++) {
+                    const p = nonPlaces[i];
+                    const col = i%cols, row = Math.floor(i/cols);
+                    const x = parseFloat((5 + col*(90/cols)).toFixed(2));
+                    const y = parseFloat((5 + row*(90/Math.ceil(nonPlaces.length/cols))).toFixed(2));
+                    newPts.push({id:p.id, x, y, page:activePage});
+                    try { await savePostePosition(activePlan, p.id, x, y, activePage); }
+                    catch(e) { failed.push({id:p.id, message:e.message||String(e)}); }
+                  }
+                  setPrevPosByPlan(posByPlan); setPts(activePlan, newPts);
+                  if (failed.length > 0) alert("Attention : "+failed.length+" poste(s) non enregistres.");
+                }} style={{display:"flex",alignItems:"center",gap:10,width:"100%",background:"#243352",color:"#cbd5e1",border:"1px solid #3d5270",borderRadius:8,padding:"9px 12px",fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:"inherit",textAlign:"left"}}>
+                  <span style={{width:16,textAlign:"center",color:"#7a90aa"}}>＋</span> Placer tous les postes
+                </button>
+
+                {/* Supprimer tous les postes */}
+                <button onClick={()=>{
+                  const pts = getPts(activePlan);
+                  if(pts.length===0) return;
+                  if(!window.confirm("Supprimer toutes les pastilles de ce plan ?")) return;
+                  setPrevPosByPlan(posByPlan);
+                  pts.forEach(pt=>sbDelete("poste_positions", activePlan+"_"+pt.id));
+                  setPts(activePlan, []);
+                }} style={{display:"flex",alignItems:"center",gap:10,width:"100%",background:"#243352",color:"#cbd5e1",border:"1px solid #3d5270",borderRadius:8,padding:"9px 12px",fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:"inherit",textAlign:"left"}}>
+                  <span style={{width:16,textAlign:"center",color:"#7a90aa"}}>⊘</span> Retirer toutes les pastilles
+                </button>
+
+                <div style={{height:1,background:"#2b3b57",margin:"6px 0"}}/>
+                <div style={{fontSize:10,fontWeight:700,color:"#5a7090",textTransform:"uppercase",letterSpacing:0.5}}>Plan</div>
+
+                {/* + Ajouter une image (etage) */}
+                {activePlanData && !activePlanData.dessine && (
+                  <label style={{display:"flex",alignItems:"center",gap:10,width:"100%",background:"#243352",color:"#cbd5e1",border:"1px solid #3d5270",borderRadius:8,padding:"9px 12px",fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:"inherit",textAlign:"left"}}>
+                    <span style={{width:16,textAlign:"center",color:"#7a90aa"}}>＋</span> Ajouter une image
+                    <input type="file" accept="image/*" style={{display:"none"}} onChange={handleAddImageToPlan}/>
+                  </label>
+                )}
+
+                {/* Export PDF */}
+                <button onClick={exportPlanPdf}
+                  style={{display:"flex",alignItems:"center",gap:10,width:"100%",background:"#243352",color:"#cbd5e1",border:"1px solid #3d5270",borderRadius:8,padding:"9px 12px",fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:"inherit",textAlign:"left"}}>
+                  <span style={{width:16,textAlign:"center",color:"#7a90aa"}}>⭳</span> Export PDF
+                </button>
+
+                {/* Annoter */}
+                <button onClick={()=>{
+                  const activePlanData = plans.find(p=>p.id===activePlan);
+                  if (!activePlanData) return;
+                  const fond = activePlanData.backgroundImg || activePlanData.img || null;
+                  if (String(activePlan).indexOf("dessine_") === 0) {
+                    setEditingDrawnPlan({
+                      id: String(activePlan).replace("dessine_",""),
+                      label: activePlanData.label,
+                      elements: activePlanData.elements || [],
+                      backgroundImg: fond,
+                    });
+                  } else {
+                    setEditingDrawnPlan({
+                      id: activePlan,
+                      label: activePlanData.label,
+                      elements: activePlanData.elements || [],
+                      backgroundImg: fond,
+                      __overwriteImgPlan: activePlan,
+                    });
+                  }
+                  setShowPlanActions(false);
+                  setShowPlanEditor(true);
+                }}
+                  style={{display:"flex",alignItems:"center",gap:10,width:"100%",background:"#243352",color:"#cbd5e1",border:"1px solid #3d5270",borderRadius:8,padding:"9px 12px",fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:"inherit",textAlign:"left"}}>
+                  <span style={{width:16,textAlign:"center",color:"#7a90aa"}}>✦</span> Annoter
+                </button>
+
+                {/* Dupliquer */}
+                <button onClick={async ()=>{
+                  const activePlanData = plans.find(p=>p.id===activePlan);
+                  if(!activePlanData) return;
+                  const newId = (activePlanData.dessine?"dessine_":"plan-")+Date.now();
+                  const newLabel = activePlanData.label+" (copie)";
+                  if (activePlanData.dessine) {
+                    const cleanId = newId.replace("dessine_","");
+                    await sbUpsert("plans_dessines", {id:cleanId, contrat:CLIENT_CONFIG.contrat, label:newLabel, elements:JSON.stringify(activePlanData.elements||[]), background_img:activePlanData.backgroundImg||""});
+                    setPlans(prev=>[...prev, {id:newId, label:newLabel, img:null, dessine:true, elements:activePlanData.elements, backgroundImg:activePlanData.backgroundImg}]);
+                  } else {
+                    await sbUpsert("plans", {id:newId, contrat:CLIENT_CONFIG.contrat, label:newLabel, img_url:activePlanData.img||""});
+                    setPlans(prev=>[...prev, {id:newId, label:newLabel, img:activePlanData.img}]);
+                  }
+                  getPts(activePlan).forEach(pt=>{ sbUpsert("poste_positions",{id:newId+"_"+pt.id, poste_id:pt.id, plan_id:newId, x:pt.x, y:pt.y, contrat:CLIENT_CONFIG.contrat}); });
+                  setPts(newId, [...getPts(activePlan)]);
+                  setActivePlanPersisted(newId);
+                  setShowPlanActions(false);
+                }} style={{display:"flex",alignItems:"center",gap:10,width:"100%",background:"#243352",color:"#cbd5e1",border:"1px solid #3d5270",borderRadius:8,padding:"9px 12px",fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:"inherit",textAlign:"left"}}>
+                  <span style={{width:16,textAlign:"center",color:"#7a90aa"}}>⧉</span> Dupliquer
+                </button>
+
+                {/* Modifier le dessin (plans dessinés) */}
+                {plans.find(p=>p.id===activePlan)?.dessine && !plans.find(p=>p.id===activePlan)?.annote && (
+                  <button onClick={()=>{
+                    const activePlanData = plans.find(p=>p.id===activePlan);
+                    const original = activePlanData.id.replace("dessine_","");
+                    setEditingDrawnPlan({id:original, label:activePlanData.label, elements:activePlanData.elements, backgroundImg:activePlanData.backgroundImg||null});
+                    setShowPlanActions(false);
+                    setShowPlanEditor(true);
+                  }} style={{display:"flex",alignItems:"center",gap:10,width:"100%",background:"#243352",color:"#cbd5e1",border:"1px solid #3d5270",borderRadius:8,padding:"9px 12px",fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:"inherit",textAlign:"left"}}>
+                    <span style={{width:16,textAlign:"center",color:"#7a90aa"}}>✦</span> Modifier le dessin
+                  </button>
+                )}
+
+                <div style={{height:1,background:"#2b3b57",margin:"6px 0"}}/>
+
+                {/* Supprimer le plan */}
+                <button onClick={()=>deletePlan(activePlan)}
+                  style={{display:"flex",alignItems:"center",gap:10,width:"100%",background:"#ef444418",color:"#f87171",border:"1px solid #ef444455",borderRadius:8,padding:"9px 12px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",textAlign:"left"}}>
+                  <span style={{width:16,textAlign:"center"}}>✕</span> Supprimer le plan
+                </button>
+              </div>
             </div>
-
-            {/* + Tous les postes */}
-            <button onClick={async ()=>{
-              const nonPlaces = filteredPostes.filter(p=>!getPts(activePlan).find(pt=>pt.id===p.id));
-              if(nonPlaces.length===0) return;
-              const cols = Math.ceil(Math.sqrt(nonPlaces.length));
-              const newPts = [...getPts(activePlan)];
-              const failed = [];
-              for (let i=0; i<nonPlaces.length; i++) {
-                const p = nonPlaces[i];
-                const col = i%cols, row = Math.floor(i/cols);
-                const x = parseFloat((5 + col*(90/cols)).toFixed(2));
-                const y = parseFloat((5 + row*(90/Math.ceil(nonPlaces.length/cols))).toFixed(2));
-                newPts.push({id:p.id, x, y});
-                try { await savePostePosition(activePlan, p.id, x, y); }
-                catch(e) { failed.push({id:p.id, message:e.message||String(e)}); }
-              }
-              setPrevPosByPlan(posByPlan); setPts(activePlan, newPts);
-              if (failed.length > 0) alert("Attention : "+failed.length+" poste(s) non enregistres.");
-            }} style={{background:"#22c55e22",color:"#22c55e",border:"1px solid #22c55e44",borderRadius:7,padding:"5px 10px",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
-              + Tous les postes
-            </button>
-
-            {/* Supprimer tous les postes */}
-            <button onClick={()=>{
-              const pts = getPts(activePlan);
-              if(pts.length===0) return;
-              if(!window.confirm("Supprimer toutes les pastilles de ce plan ?")) return;
-              setPrevPosByPlan(posByPlan);
-              pts.forEach(pt=>sbDelete("poste_positions", activePlan+"_"+pt.id));
-              setPts(activePlan, []);
-            }} style={{background:"#ef444411",color:"#ef4444",border:"1px solid #ef444433",borderRadius:7,padding:"5px 10px",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
-              Supp. postes
-            </button>
-
-            {/* Export PDF */}
-            <button onClick={exportPlanPdf}
-              style={{background:"#1d4ed822",color:"#3b82f6",border:"1px solid #3b82f644",borderRadius:7,padding:"5px 12px",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
-              Export PDF
-            </button>
-
-            {/* Effacer */}
-            <button onClick={()=>setPts(activePlan,[])}
-              style={{background:"transparent",color:"#7a90aa",border:"1px solid #3d5270",borderRadius:7,padding:"5px 10px",fontSize:11,cursor:"pointer",fontFamily:"inherit"}}>
-              Effacer
-            </button>
-
-            {/* Annoter */}
-            <button onClick={()=>{
-              const activePlanData = plans.find(p=>p.id===activePlan);
-              if (!activePlanData) return;
-              const fond = activePlanData.backgroundImg || activePlanData.img || null;
-              if (String(activePlan).indexOf("dessine_") === 0) {
-                // Plan dessine autonome : sa ligne plans_dessines porte l id sans le
-                // prefixe. Le renvoyer prefixe creerait une ligne neuve, donc un doublon.
-                setEditingDrawnPlan({
-                  id: String(activePlan).replace("dessine_",""),
-                  label: activePlanData.label,
-                  elements: activePlanData.elements || [],
-                  backgroundImg: fond,
-                });
-              } else {
-                // Annotation en place d un plan image : meme id, les pastilles restent
-                // rattachees, et on rouvre avec les annotations deja posees.
-                setEditingDrawnPlan({
-                  id: activePlan,
-                  label: activePlanData.label,
-                  elements: activePlanData.elements || [],
-                  backgroundImg: fond,
-                  __overwriteImgPlan: activePlan,
-                });
-              }
-              setShowPlanEditor(true);
-            }}
-              style={{background:"transparent",color:"#f59e0b",border:"1px solid #3d5270",borderRadius:7,padding:"5px 10px",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
-              Annoter
-            </button>
-
-            {/* Dupliquer */}
-            <button onClick={async ()=>{
-              const activePlanData = plans.find(p=>p.id===activePlan);
-              if(!activePlanData) return;
-              const newId = (activePlanData.dessine?"dessine_":"plan-")+Date.now();
-              const newLabel = activePlanData.label+" (copie)";
-              if (activePlanData.dessine) {
-                const cleanId = newId.replace("dessine_","");
-                await sbUpsert("plans_dessines", {id:cleanId, contrat:CLIENT_CONFIG.contrat, label:newLabel, elements:JSON.stringify(activePlanData.elements||[]), background_img:activePlanData.backgroundImg||""});
-                setPlans(prev=>[...prev, {id:newId, label:newLabel, img:null, dessine:true, elements:activePlanData.elements, backgroundImg:activePlanData.backgroundImg}]);
-              } else {
-                await sbUpsert("plans", {id:newId, contrat:CLIENT_CONFIG.contrat, label:newLabel, img_url:activePlanData.img||""});
-                setPlans(prev=>[...prev, {id:newId, label:newLabel, img:activePlanData.img}]);
-              }
-              getPts(activePlan).forEach(pt=>{ sbUpsert("poste_positions",{id:newId+"_"+pt.id, poste_id:pt.id, plan_id:newId, x:pt.x, y:pt.y, contrat:CLIENT_CONFIG.contrat}); });
-              setPts(newId, [...getPts(activePlan)]);
-              setActivePlanPersisted(newId);
-            }} style={{background:"#8b5cf622",color:"#8b5cf6",border:"1px solid #8b5cf644",borderRadius:7,padding:"5px 10px",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
-              Dupliquer
-            </button>
-
-            {/* Modifier le dessin (plans dessinés) */}
-            {plans.find(p=>p.id===activePlan)?.dessine && !plans.find(p=>p.id===activePlan)?.annote && (
-              <button onClick={()=>{
-                const activePlanData = plans.find(p=>p.id===activePlan);
-                const original = activePlanData.id.replace("dessine_","");
-                setEditingDrawnPlan({id:original, label:activePlanData.label, elements:activePlanData.elements, backgroundImg:activePlanData.backgroundImg||null});
-                setShowPlanEditor(true);
-              }} style={{background:"#8b5cf622",color:"#8b5cf6",border:"1px solid #8b5cf644",borderRadius:7,padding:"5px 10px",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
-                Modifier le dessin
-              </button>
-            )}
-
-            {/* Zoom — déplacé sous les onglets */}
-
-            {/* Supprimer le plan */}
-            <button onClick={()=>deletePlan(activePlan)} style={{background:"#ef4444",color:"#fff",border:"none",borderRadius:7,padding:"5px 10px",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
-              ✕ Supprimer
-            </button>
-          </div>
+          </>
         )}
 
         {showPlanEditor && (
@@ -12843,13 +13577,39 @@ function PlanImplantation({ seuilsGlobaux }) {
           </div>
         ) : (
         <>
+        {activePlanData && !activePlanData.dessine && (
+          <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap",marginBottom:8}}>
+            {planImagesArr.length>1 && planImagesArr.map((_img,idx)=>(
+              <div key={idx} draggable
+                onDragStart={e=>{ setDragImgIdx(idx); e.dataTransfer.effectAllowed="move"; try{e.dataTransfer.setData("text/plain",String(idx));}catch(_e){} }}
+                onDragOver={e=>{ if(dragImgIdx!==null&&dragImgIdx!==idx){ e.preventDefault(); e.dataTransfer.dropEffect="move"; } }}
+                onDrop={e=>{ e.preventDefault(); if(dragImgIdx!==null) reorderImageTo(dragImgIdx, idx); setDragImgIdx(null); }}
+                onDragEnd={()=>setDragImgIdx(null)}
+                title="Glissez pour reordonner"
+                style={{display:"flex",alignItems:"center",gap:1,background:activePage===idx?"#1d4ed8":"#243352",border:"1px solid "+(dragImgIdx===idx?"#3b82f6":(activePage===idx?"#3b82f6":"#3d5270")),borderRadius:7,padding:"1px 3px",cursor:"grab",opacity:dragImgIdx===idx?0.4:1}}>
+                <span style={{fontSize:11,color:activePage===idx?"#bcd2ff":"#5a7090",cursor:"grab",lineHeight:1,paddingLeft:2}}>⠿</span>
+                <button onClick={()=>setActivePageByPlan(prev=>({...prev,[activePlan]:idx}))}
+                  onDoubleClick={()=>renameImage(idx)}
+                  title="Cliquez pour afficher, double-cliquez pour renommer"
+                  style={{background:"transparent",color:activePage===idx?"#fff":"#94a3b8",border:"none",padding:"3px 8px",fontSize:11,fontWeight:600,cursor:"pointer",fontFamily:"inherit"}}>
+                  {(_img&&_img.name)?_img.name:("Plan "+(idx+1))}
+                </button>
+                {activePage===idx && (
+                  <button onClick={()=>deleteImageFromPlan(idx)} title="Supprimer ce plan"
+                    style={{background:"transparent",color:"#fecaca",border:"none",padding:"0 3px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>✕</button>
+                )}
+              </div>
+            ))}
+            {planImagesArr.length>1 && <span style={{fontSize:10,color:"#5a7090"}}>{planImagesArr.length} plans — chaque poste est posé sur le plan affiché</span>}
+          </div>
+        )}
         {/* Plan image */}
-        <div style={{overflowX:"auto",overflowY:"visible"}}>
+        <div ref={planScrollRef} style={{overflowX:"auto",overflowY:"visible"}}>
           <div id="plan-export-zone"
             style={{position:"relative",width:zoom+"%",minWidth:600,cursor:placingPoste||movingPoste?"crosshair":"default"}}
             onClick={handlePlanClick}>
-            {activePlanData&&activePlanData.img
-              ? <img src={activePlanData.img} alt={(activePlanData&&activePlanData.label)} style={{width:"100%",display:"block",userSelect:"none"}} draggable={false}/>
+            {planImagesArr[activePage]
+              ? <img src={planImagesArr[activePage].url} alt={(activePlanData&&activePlanData.label)} style={{width:"100%",display:"block",userSelect:"none"}} draggable={false} onLoad={()=>setImgReflow(v=>v+1)}/>
               : activePlanData&&activePlanData.dessine
               ? <svg viewBox="0 0 900 600" style={{width:"100%",display:"block",background:"#fff"}}>
                   {activePlanData.backgroundImg && <image href={activePlanData.backgroundImg} x="0" y="0" width="900" height="600" preserveAspectRatio="xMidYMid meet"/>}
@@ -12872,7 +13632,7 @@ function PlanImplantation({ seuilsGlobaux }) {
             {planPostes.map(pt=>{
               const p=postes.find(p=>p.id===pt.id);
               if(!p)return null;
-              if(filterNuisibleArr.length>0&&!filterNuisibleArr.some(f=>{const id=p.id||"";if(f==="__RE")return /^RE/i.test(id);if(f==="__RI")return /^(RI|R\d|S\d)/i.test(id)&&!/^RE/i.test(id);return (p.nuisible||"Rongeurs")===f;}))return null;
+              if(!posteVisiblePlan(p))return null;   // filtres cumulables : desactive, produit nu, nature DEIV, macro, nuisible
               const col=getPosteColor(p,selDate);
               const isHov=hover===pt.id;
               const isMov=movingPoste===pt.id;
@@ -12899,7 +13659,7 @@ function PlanImplantation({ seuilsGlobaux }) {
                       const yPct = Math.max(0,Math.min(100,((ev.clientY-rect.top)/rect.height*100))).toFixed(2);
                       const currentPts = (posByPlanRef.current[activePlan]||[]).map(p=>p.id===pt.id?{...p,x:parseFloat(xPct),y:parseFloat(yPct)}:p);
                       setPts(activePlan, currentPts);
-                      savePostePosition(activePlan, pt.id, parseFloat(xPct), parseFloat(yPct))
+                      savePostePosition(activePlan, pt.id, parseFloat(xPct), parseFloat(yPct), activePage)
                         .catch(err => alert("Le deplacement du poste "+pt.id+" n'a pas pu etre enregistre sur le serveur ("+(err.message||err)+"). Reessayez."));
                     };
                     document.addEventListener("mousemove", onMove);
@@ -12927,7 +13687,7 @@ function PlanImplantation({ seuilsGlobaux }) {
                       const yPct = Math.max(0,Math.min(100,((touch.clientY-rect.top)/rect.height*100))).toFixed(2);
                       const currentPts = (posByPlanRef.current[activePlan]||[]).map(p=>p.id===pt.id?{...p,x:parseFloat(xPct),y:parseFloat(yPct)}:p);
                       setPts(activePlan, currentPts);
-                      savePostePosition(activePlan, pt.id, parseFloat(xPct), parseFloat(yPct))
+                      savePostePosition(activePlan, pt.id, parseFloat(xPct), parseFloat(yPct), activePage)
                         .catch(err => alert("Le deplacement du poste "+pt.id+" n'a pas pu etre enregistre."));
                     };
                     document.addEventListener("touchmove", onTouchMove, { passive: false });
@@ -12936,8 +13696,8 @@ function PlanImplantation({ seuilsGlobaux }) {
                   onContextMenu={e=>{e.preventDefault();e.stopPropagation();removePosteFromPlan(pt.id);}}
                   onMouseEnter={()=>setHover(pt.id)} onMouseLeave={()=>setHover(null)}>
                   {renderPastille(
-                    posteFormes[categorieForme(p)] || "rond", 22, col,
-                    <span style={{fontSize:posteLabelFontSize(pt.id,7),fontWeight:900,color:"#fff",textShadow:"0 1px 2px rgba(0,0,0,0.6)"}}>{posteLabel(pt.id)}</span>,
+                    posteFormes[categorieForme(p)] || "rond", PASTILLE_CONFIG.size, col,
+                    <span style={{fontSize:posteLabelFontSize(pt.id,PASTILLE_CONFIG.labelSize),fontWeight:900,color:PASTILLE_CONFIG.labelColor,textShadow:"0 1px 2px rgba(0,0,0,0.6)"}}>{posteLabel(pt.id)}</span>,
                     isHov
                   )}
                   {isHov&&(
@@ -12974,7 +13734,7 @@ function PlanImplantation({ seuilsGlobaux }) {
             {nuisiblesMasques.indexOf("__RI")<0 && <div style={{display:"flex",alignItems:"center",gap:5}}><PuceForme forme={posteFormes["RI"]||"rond"} col={nuisibleColors["__RI"]||"#60a5fa"}/><span style={{fontSize:11,color:"#7a90aa"}}>Rongeurs int. (RI)</span></div>}
             {NUISIBLES_LIST.filter(n=>n!=="Rongeurs" && nuisiblesMasques.indexOf(n)<0).map(n=>{
               const col=nuisibleColors[n]||"#7a90aa";
-              const count=postes.filter(p=>(p.nuisible||"Rongeurs")===n).length;
+              const count=postesNonDesactives.filter(p=>(p.nuisible||"Rongeurs")===n).length;
               const formeN = posteFormes[n==="Rongeurs"?"RI":n]||"rond";
               return(<div key={n} style={{display:"flex",alignItems:"center",gap:5}}><PuceForme forme={formeN} col={col}/><span style={{fontSize:11,color:"#7a90aa"}}>{n} ({count})</span></div>);
             })}
@@ -12989,6 +13749,25 @@ function PlanImplantation({ seuilsGlobaux }) {
       {showFormesEditor && (
         <div style={{ marginTop:10, background:"#243352", border:"1px solid #3d5270", borderRadius:10, padding:14 }}>
           <div style={{ fontSize:12, color:"#94a3b8", fontWeight:700, marginBottom:10 }}>Gestion des pastilles — forme, couleur (en mode Type), et affichage dans les legendes</div>
+          <div style={{ display:"flex", gap:20, flexWrap:"wrap", alignItems:"flex-start", marginBottom:14, paddingBottom:14, borderBottom:"1px solid #3d5270" }}>
+            <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(120px,1fr))", gap:10, flex:1, minWidth:240 }}>
+              <div><label style={{fontSize:9,color:"#7a90aa",display:"block",marginBottom:3}}>Taille pastille (px)</label><input type="number" value={pastCfg.size} onChange={e=>setPastCfg(p=>({...p,size:e.target.value}))} style={{background:"#1a2540",border:"1px solid #3d5270",borderRadius:6,padding:"4px 8px",color:"#f1f5f9",fontSize:11,fontFamily:"inherit",width:"100%",boxSizing:"border-box"}}/></div>
+              <div><label style={{fontSize:9,color:"#7a90aa",display:"block",marginBottom:3}}>Taille du nom (px)</label><input type="number" value={pastCfg.labelSize} onChange={e=>setPastCfg(p=>({...p,labelSize:e.target.value}))} style={{background:"#1a2540",border:"1px solid #3d5270",borderRadius:6,padding:"4px 8px",color:"#f1f5f9",fontSize:11,fontFamily:"inherit",width:"100%",boxSizing:"border-box"}}/></div>
+              <div><label style={{fontSize:9,color:"#7a90aa",display:"block",marginBottom:3}}>Couleur du nom</label><input type="color" value={pastCfg.labelColor} onChange={e=>setPastCfg(p=>({...p,labelColor:e.target.value}))} style={{width:"100%",height:28,border:"1px solid #3d5270",borderRadius:6,background:"#1a2540",padding:2,boxSizing:"border-box"}}/></div>
+              <div><label style={{fontSize:9,color:"#7a90aa",display:"block",marginBottom:3}}>Epaisseur du cercle (px)</label><input type="number" value={pastCfg.cercleSize} onChange={e=>setPastCfg(p=>({...p,cercleSize:e.target.value}))} style={{background:"#1a2540",border:"1px solid #3d5270",borderRadius:6,padding:"4px 8px",color:"#f1f5f9",fontSize:11,fontFamily:"inherit",width:"100%",boxSizing:"border-box"}}/></div>
+              <div><label style={{fontSize:9,color:"#7a90aa",display:"block",marginBottom:3}}>Couleur du cercle</label><input type="color" value={pastCfg.cercleColor} onChange={e=>setPastCfg(p=>({...p,cercleColor:e.target.value}))} style={{width:"100%",height:28,border:"1px solid #3d5270",borderRadius:6,background:"#1a2540",padding:2,boxSizing:"border-box"}}/></div>
+            </div>
+            <div style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:6 }}>
+              <div style={{ fontSize:9, color:"#7a90aa" }}>Aperçu</div>
+              <div style={{ width:120, height:74, background:"#0f1e38", borderRadius:8, display:"flex", alignItems:"center", justifyContent:"center" }}>
+                <div style={{ width:(Number(pastCfg.size)||22), height:(Number(pastCfg.size)||22), borderRadius:"50%", background:"#ef4444", border:((Number(pastCfg.cercleSize)||0)+"px solid "+(pastCfg.cercleColor||"#ffffff")), display:"flex", alignItems:"center", justifyContent:"center", boxShadow:"0 2px 8px rgba(0,0,0,0.7)", boxSizing:"border-box" }}>
+                  <span style={{ fontSize:(Number(pastCfg.labelSize)||7), fontWeight:900, color:(pastCfg.labelColor||"#ffffff"), textShadow:"0 1px 2px rgba(0,0,0,0.6)" }}>RE1</span>
+                </div>
+              </div>
+              <button onClick={savePastCfg} disabled={savingPast} style={{ background:"#0ea5e9", color:"#fff", border:"none", borderRadius:7, padding:"6px 14px", fontSize:11, fontWeight:700, cursor:savingPast?"default":"pointer", fontFamily:"inherit", opacity:savingPast?0.6:1 }}>{savingPast?"...":"Enregistrer"}</button>
+              {savedPast && <span style={{ color:"#22c55e", fontSize:10, fontWeight:600 }}>Enregistré</span>}
+            </div>
+          </div>
           <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
             {[["RE","Rongeurs exterieurs (RE)"],["RI","Rongeurs interieurs (RI)"],["Blattes","Blattes"],["Insectes volants","Insectes volants"],["Teignes","Teignes"],["IPS","IPS"]].map(([cat,lib])=>(
               <div key={cat} style={{ display:"flex", alignItems:"center", gap:10 }}>
@@ -13274,7 +14053,7 @@ function Audit({ seuilsGlobaux }) {
     try {
       await sbUpsertStrict("plan_actions", {
         id: actionId, contrat: CLIENT_CONFIG.contrat,
-        titre5m: "Méthode", type: "corrective", priorite,
+        titre5m: detect5M(obs.description), type: "corrective", priorite,
         zone: obs.zone || "",
         description: obs.description || "",
         recommandation: obs.action || "",
@@ -13784,68 +14563,152 @@ function SitesTab() {
   const [code, setCode] = useState("");
   const [libelle, setLibelle] = useState("");
   const [msg, setMsg] = useState("");
+  const [savingId, setSavingId] = useState("");
+  const CERTIFS_BASE = ["IFS","BRC","ISO 22000","FSSC 22000","HACCP"];
+
+  function normaliser(r) {
+    var certifs = [];
+    try { certifs = typeof r.certifications === "string" ? JSON.parse(r.certifications||"[]") : (r.certifications||[]); } catch(e) { certifs = []; }
+    return {
+      id: r.id,
+      site: r.site||"", adresse: r.adresse||"", contrat: r.contrat||"", type_site: r.type_site||"",
+      date_debut: r.date_debut||"", date_fin: r.date_fin||"",
+      passages_an: r.passages_an||12, seuil_vigilance: r.seuil_vigilance||5, seuil_critique: r.seuil_critique||10,
+      contact1_nom: r.contact1_nom||"", contact1_titre: r.contact1_titre||"", contact1_mail: r.contact1_mail||"", contact1_tel: r.contact1_tel||"",
+      contact2_nom: r.contact2_nom||"", contact2_titre: r.contact2_titre||"", contact2_mail: r.contact2_mail||"", contact2_tel: r.contact2_tel||"",
+      certifications: Array.isArray(certifs) ? certifs : [],
+    };
+  }
 
   function recharger() {
     sbFetch("config_client?order=id.asc", "GET").then(d => {
       var liste = Array.isArray(d) ? d : [];
-      setSites(liste);
-      // Synchroniser la globale lue par le selecteur de site en haut.
+      setSites(liste.map(normaliser));
       SITES_DISPO = liste.map(x => ({ id: x.id, site: x.site || x.id }));
-      // Rafraichir le selecteur en haut SANS remonter la page (contrairement a
-      // un changement de site, ici on ne recharge pas les donnees).
+      liste.forEach(function(x){ SITES_CONFIG[x.id] = x; });
       if (typeof __onSitesListChange === "function") __onSitesListChange();
     });
   }
   useEffect(() => { recharger(); }, []);
+
+  function majChamp(idx, champ, valeur) {
+    setSites(prev => prev.map((s,i) => i===idx ? { ...s, [champ]: valeur } : s));
+  }
+  function toggleCertif(idx, c) {
+    setSites(prev => prev.map((s,i) => {
+      if (i!==idx) return s;
+      var has = s.certifications.indexOf(c) !== -1;
+      return { ...s, certifications: has ? s.certifications.filter(x=>x!==c) : s.certifications.concat([c]) };
+    }));
+  }
+
+  async function enregistrer(s) {
+    setSavingId(s.id);
+    var payload = {
+      id: s.id, site: s.site, adresse: s.adresse, contrat: s.contrat, type_site: s.type_site,
+      date_debut: s.date_debut, date_fin: s.date_fin,
+      passages_an: parseInt(s.passages_an)||12, seuil_vigilance: parseInt(s.seuil_vigilance)||5, seuil_critique: parseInt(s.seuil_critique)||10,
+      contact1_nom: s.contact1_nom, contact1_titre: s.contact1_titre, contact1_mail: s.contact1_mail, contact1_tel: s.contact1_tel,
+      contact2_nom: s.contact2_nom, contact2_titre: s.contact2_titre, contact2_mail: s.contact2_mail, contact2_tel: s.contact2_tel,
+      certifications: JSON.stringify(s.certifications||[]),
+    };
+    try {
+      await sbFetch("config_client", "POST", payload, { Prefer: "resolution=merge-duplicates,return=representation" });
+      setSavingId("");
+      setMsg("Site " + (s.site||s.id) + " enregistré.");
+      if (s.id === SITE_ACTIF) {
+        Object.keys(payload).forEach(function(k){ if (k!=="id" && k!=="certifications") CLIENT_CONFIG[k]=payload[k]; });
+        try { CLIENT_CONFIG.certifications = s.certifications||[]; } catch(_e) {}
+      }
+    } catch(err) {
+      setSavingId("");
+      setMsg("Echec enregistrement " + (s.site||s.id) + " : " + (err && err.message ? err.message : err));
+    }
+  }
 
   function ajouter() {
     var c = (code||"").trim().toUpperCase().replace(/[^A-Z0-9_-]/g, "");
     if (!c) { setMsg("Le code du site est obligatoire."); return; }
     if (sites.filter(s => s.id === c).length > 0) { setMsg("Le code " + c + " existe deja."); return; }
     var modele = sites[0] || {};
-    sbUpsert("config_client", {
-      id: c,
-      site: (libelle||"").trim() || c,
-      nom: modele.nom || CLIENT_CONFIG.nom,
-      contrat: modele.contrat || CLIENT_CONFIG.contrat,
-      type_site: modele.type_site || "",
-      date_debut: modele.date_debut || "",
-      date_fin: modele.date_fin || "",
-      passages_an: modele.passages_an || 12,
-      seuil_vigilance: modele.seuil_vigilance || 5,
-      seuil_critique: modele.seuil_critique || 10,
-    }).then(() => { setCode(""); setLibelle(""); setMsg("Site " + c + " cree. Il apparait dans le selecteur en haut."); recharger(); });
-  }
-
-  function renommer(s) {
-    var v = window.prompt("Nouveau libelle pour le site " + s.id + " :", s.site || s.id);
-    if (v === null) return;
-    sbUpsert("config_client", { ...s, site: v.trim() || s.id })
-      .then(() => { setMsg("Libelle mis a jour. Recharge la page pour le voir dans le selecteur."); recharger(); });
+    var etaitVide = sites.length === 0;
+    sbFetch("config_client", "POST", {
+      id: c, site: (libelle||"").trim() || c,
+      nom: modele.nom || CLIENT_CONFIG.nom, contrat: CLIENT_CONFIG.contrat || "",
+      type_site: "", passages_an: 12, seuil_vigilance: 5, seuil_critique: 10,
+    }, { Prefer: "resolution=merge-duplicates" }).then(() => {
+      setCode(""); setLibelle(""); setMsg("Site " + c + " créé.");
+      recharger();
+      if (etaitVide) { try { window.localStorage.setItem("aads_site_actif", c); } catch(_e) {} setTimeout(function(){ window.location.reload(); }, 600); }
+    });
   }
 
   function supprimer(s) {
     if (s.id === SITE_ACTIF) { setMsg("Impossible de supprimer le site en cours. Bascule sur un autre site avant."); return; }
     if (sites.length <= 1) { setMsg("Il doit rester au moins un site."); return; }
-    if (!window.confirm("Supprimer le site " + s.id + " ?\n\nSes postes, passages et plans restent en base mais deviennent inaccessibles depuis le portail. Confirmer ?")) return;
-    sbDelete("config_client", s.id).then(() => { setMsg("Site " + s.id + " retire."); recharger(); });
+    if (!window.confirm("Supprimer le site " + (s.site||s.id) + " ?\n\nSes postes, passages et plans restent en base mais deviennent inaccessibles depuis le portail. Confirmer ?")) return;
+    sbDelete("config_client", s.id).then(() => { setMsg("Site " + s.id + " retiré."); recharger(); });
   }
 
-  var inp = { background:"#1a2540", border:"1px solid #3d5270", borderRadius:8, padding:"8px 10px", color:"#f1f5f9", fontSize:12, fontFamily:"inherit" };
+  var inp = { background:"#1a2540", border:"1px solid #3d5270", borderRadius:8, padding:"8px 10px", color:"#f1f5f9", fontSize:12, fontFamily:"inherit", width:"100%", boxSizing:"border-box" };
+  var lab = { fontSize:10, color:"#7a90aa", fontWeight:700, textTransform:"uppercase", display:"block", marginBottom:4 };
+  var sousTitre = { fontSize:12, fontWeight:700, color:"#cbd5e1", margin:"10px 0 6px" };
+
   return (
     <div>
-      <div style={{ fontSize:11, color:"#7a90aa", marginBottom:14 }}>Chaque site est independant : ses postes, passages, plans, actions et seuils lui sont propres. Le selecteur en haut de page permet de basculer.</div>
-      {sites.map(s => (
-        <div key={s.id} style={{ display:"flex", alignItems:"center", gap:8, background:"#243352", borderRadius:9, padding:"9px 12px", marginBottom:7, border:"1px solid " + (s.id===SITE_ACTIF ? "#8b5cf6" : "#3d5270") }}>
-          <div style={{ flex:1 }}>
-            <span style={{ fontSize:13, fontWeight:700, color:"#f1f5f9" }}>{s.site || s.id}</span>
-            <span style={{ fontSize:10, color:"#5a7090", marginLeft:8 }}>code {s.id}</span>
-            {s.id===SITE_ACTIF && <span style={{ fontSize:9, fontWeight:700, color:"#8b5cf6", marginLeft:8 }}>SITE EN COURS</span>}
+      <div style={{ fontSize:11, color:"#7a90aa", marginBottom:14 }}>Chaque site a ses propres paramètres (adresse, contrat, seuils, contacts, certifications). Le nom du client, lui, est commun et se règle dans l onglet Client.</div>
+      {sites.map((s, idx) => (
+        <div key={s.id} style={{ background:"#243352", borderRadius:10, padding:14, marginBottom:14, border:"1px solid " + (s.id===SITE_ACTIF ? "#8b5cf6" : "#3d5270") }}>
+          <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:12 }}>
+            <div>
+              <span style={{ fontSize:14, fontWeight:800, color:"#f1f5f9" }}>{s.site || s.id}</span>
+              <span style={{ fontSize:10, color:"#5a7090", marginLeft:8 }}>code {s.id}</span>
+              {s.id===SITE_ACTIF && <span style={{ fontSize:9, fontWeight:700, color:"#8b5cf6", marginLeft:8 }}>SITE EN COURS</span>}
+            </div>
+            <button onClick={()=>supprimer(s)} style={{ background:"transparent", color:"#ef4444", border:"1px solid #ef444455", borderRadius:6, padding:"4px 10px", fontSize:11, cursor:"pointer", fontFamily:"inherit" }}>Retirer</button>
           </div>
-          <button onClick={()=>renommer(s)} style={{ background:"transparent", color:"#7a90aa", border:"1px solid #3d5270", borderRadius:6, padding:"4px 10px", fontSize:11, cursor:"pointer", fontFamily:"inherit" }}>Renommer</button>
-          <button onClick={()=>supprimer(s)} style={{ background:"transparent", color:"#ef4444", border:"1px solid #ef444455", borderRadius:6, padding:"4px 10px", fontSize:11, cursor:"pointer", fontFamily:"inherit" }}>Retirer</button>
+
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginBottom:10 }}>
+            <div style={{ gridColumn:"1/-1" }}><label style={lab}>Libellé du site (sélecteur)</label><input value={s.site} onChange={e=>majChamp(idx,"site",e.target.value)} style={inp}/></div>
+            <div style={{ gridColumn:"1/-1" }}><label style={lab}>Adresse</label><input value={s.adresse} onChange={e=>majChamp(idx,"adresse",e.target.value)} style={inp}/></div>
+            <div><label style={lab}>Numéro de contrat</label><input value={s.contrat} onChange={e=>majChamp(idx,"contrat",e.target.value)} style={inp}/></div>
+            <div><label style={lab}>Type de site</label><input value={s.type_site} onChange={e=>majChamp(idx,"type_site",e.target.value)} style={inp}/></div>
+            <div><label style={lab}>Date début</label><input value={s.date_debut} onChange={e=>majChamp(idx,"date_debut",e.target.value)} placeholder="JJ/MM/AAAA" style={inp}/></div>
+            <div><label style={lab}>Date fin</label><input value={s.date_fin} onChange={e=>majChamp(idx,"date_fin",e.target.value)} placeholder="JJ/MM/AAAA" style={inp}/></div>
+            <div><label style={lab}>Passages par an</label><input type="number" value={s.passages_an} onChange={e=>majChamp(idx,"passages_an",e.target.value)} style={inp}/></div>
+            <div><label style={lab}>Seuil vigilance</label><input type="number" value={s.seuil_vigilance} onChange={e=>majChamp(idx,"seuil_vigilance",e.target.value)} style={inp}/></div>
+            <div><label style={lab}>Seuil critique</label><input type="number" value={s.seuil_critique} onChange={e=>majChamp(idx,"seuil_critique",e.target.value)} style={inp}/></div>
+          </div>
+
+          <div style={sousTitre}>Contact 1</div>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginBottom:8 }}>
+            <div><label style={lab}>Nom</label><input value={s.contact1_nom} onChange={e=>majChamp(idx,"contact1_nom",e.target.value)} style={inp}/></div>
+            <div><label style={lab}>Titre / Fonction</label><input value={s.contact1_titre} onChange={e=>majChamp(idx,"contact1_titre",e.target.value)} style={inp}/></div>
+            <div><label style={lab}>Email</label><input value={s.contact1_mail} onChange={e=>majChamp(idx,"contact1_mail",e.target.value)} style={inp}/></div>
+            <div><label style={lab}>Téléphone</label><input value={s.contact1_tel} onChange={e=>majChamp(idx,"contact1_tel",e.target.value)} style={inp}/></div>
+          </div>
+          <div style={sousTitre}>Contact 2</div>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginBottom:8 }}>
+            <div><label style={lab}>Nom</label><input value={s.contact2_nom} onChange={e=>majChamp(idx,"contact2_nom",e.target.value)} style={inp}/></div>
+            <div><label style={lab}>Titre / Fonction</label><input value={s.contact2_titre} onChange={e=>majChamp(idx,"contact2_titre",e.target.value)} style={inp}/></div>
+            <div><label style={lab}>Email</label><input value={s.contact2_mail} onChange={e=>majChamp(idx,"contact2_mail",e.target.value)} style={inp}/></div>
+            <div><label style={lab}>Téléphone</label><input value={s.contact2_tel} onChange={e=>majChamp(idx,"contact2_tel",e.target.value)} style={inp}/></div>
+          </div>
+
+          <div style={sousTitre}>Certifications</div>
+          <div style={{ display:"flex", flexWrap:"wrap", gap:6, marginBottom:10 }}>
+            {CERTIFS_BASE.concat(s.certifications.filter(function(c){ return CERTIFS_BASE.indexOf(c)===-1; })).map(function(c){
+              var active = s.certifications.indexOf(c) !== -1;
+              return (
+                <button key={c} onClick={()=>toggleCertif(idx,c)} style={{ background:active?"#1d4ed8":"#1a2540", color:active?"#fff":"#94a3b8", border:"1px solid "+(active?"#3b82f6":"#3d5270"), borderRadius:20, padding:"5px 12px", fontSize:11, fontWeight:active?700:500, cursor:"pointer", fontFamily:"inherit" }}>{active?"✓ ":""}{c}</button>
+              );
+            })}
+          </div>
+
+          <button onClick={()=>enregistrer(s)} disabled={savingId===s.id} style={{ background:"#1d4ed8", color:"#fff", border:"none", borderRadius:8, padding:"8px 18px", fontSize:12, fontWeight:700, cursor:savingId===s.id?"default":"pointer", fontFamily:"inherit", opacity:savingId===s.id?0.6:1 }}>{savingId===s.id?"Enregistrement...":"Enregistrer ce site"}</button>
         </div>
       ))}
+
       <div style={{ marginTop:16, paddingTop:16, borderTop:"1px solid #3d5270" }}>
         <div style={{ fontSize:12, fontWeight:700, color:"#f1f5f9", marginBottom:8 }}>Ajouter un site</div>
         <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
@@ -13860,11 +14723,13 @@ function SitesTab() {
   );
 }
 
+
 function ParametresModal({ onClose }) {
   const [form, setForm] = useState({
     nom: CLIENT_CONFIG.nom,
     contrat: CLIENT_CONFIG.contrat,
     site: CLIENT_CONFIG.site,
+    adresse: CLIENT_CONFIG.adresse||"",
     type_site: CLIENT_CONFIG.type_site,
     date_debut: CLIENT_CONFIG.date_debut,
     date_fin: CLIENT_CONFIG.date_fin,
@@ -13924,6 +14789,7 @@ function ParametresModal({ onClose }) {
     CLIENT_CONFIG.nom = form.nom;
     CLIENT_CONFIG.contrat = form.contrat;
     CLIENT_CONFIG.site = form.site;
+    CLIENT_CONFIG.adresse = form.adresse;
     CLIENT_CONFIG.type_site = form.type_site;
     CLIENT_CONFIG.date_debut = form.date_debut;
     CLIENT_CONFIG.date_fin = form.date_fin;
@@ -13953,6 +14819,7 @@ function ParametresModal({ onClose }) {
       nom: form.nom,
       contrat: form.contrat,
       site: form.site,
+      adresse: form.adresse,
       type_site: form.type_site,
       date_debut: form.date_debut,
       date_fin: form.date_fin,
@@ -13971,6 +14838,13 @@ function ParametresModal({ onClose }) {
     };
     try {
       await sbFetch("config_client", "POST", payload, { Prefer: "resolution=merge-duplicates,return=representation" });
+      // Le nom du client est commun a tous les sites : on le propage aux autres lignes.
+      try {
+        var idsSites = (SITES_DISPO||[]).map(function(s){ return s.id; }).filter(function(id){ return id && id !== idCible; });
+        for (var i2=0;i2<idsSites.length;i2++) {
+          await sbFetch("config_client", "POST", { id: idsSites[i2], nom: form.nom }, { Prefer: "resolution=merge-duplicates" });
+        }
+      } catch(_e) {}
       setSaving(false);
       setSaved(true);
       // Portail neuf : si aucun site n etait actif, la config vient de creer le
@@ -13985,6 +14859,25 @@ function ParametresModal({ onClose }) {
     } catch (err) {
       setSaving(false);
       alert("Echec de l enregistrement de la configuration client. Detail : " + (err && err.message ? err.message : err));
+    }
+  }
+
+  async function handleSaveNom() {
+    setSaving(true);
+    CLIENT_CONFIG.nom = form.nom;
+    try {
+      var liste = await sbFetch("config_client?order=id.asc", "GET");
+      var ids = (Array.isArray(liste) ? liste : []).map(function(r){ return r.id; }).filter(Boolean);
+      if (ids.length === 0 && SITE_ACTIF) ids = [SITE_ACTIF];
+      for (var i=0;i<ids.length;i++) {
+        await sbFetch("config_client", "POST", { id: ids[i], nom: form.nom }, { Prefer: "resolution=merge-duplicates" });
+      }
+      setSaving(false);
+      setSaved(true);
+      setTimeout(function(){ setSaved(false); }, 2000);
+    } catch (err) {
+      setSaving(false);
+      alert("Echec de l enregistrement du nom. Detail : " + (err && err.message ? err.message : err));
     }
   }
 
@@ -14012,103 +14905,16 @@ function ParametresModal({ onClose }) {
         {tab==="client" && (
         <>
         <div style={{ marginBottom:16 }}>
-          <div style={{ fontSize:12, color:"#7a90aa" }}>Ces informations sont utilisées dans tout le portail (PDF, en-têtes, dashboard...)</div>
+          <div style={{ fontSize:12, color:"#7a90aa" }}>Le nom du client est commun à tous les sites. Tous les autres paramètres (adresse, contrat, contacts, seuils, certifications) se règlent site par site dans l onglet Sites.</div>
         </div>
-
-        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14, marginBottom:16 }}>
-          <div style={{gridColumn:"1/-1"}}>
-            <label style={labelStyle}>Nom du client</label>
-            <input value={form.nom} onChange={e=>setForm(p=>({...p, nom:e.target.value}))} style={inpStyle}/>
-          </div>
-          <div>
-            <label style={labelStyle}>Numéro de contrat</label>
-            <input value={form.contrat} onChange={e=>setForm(p=>({...p, contrat:e.target.value}))} style={inpStyle}/>
-          </div>
-          <div>
-            <label style={labelStyle}>Type de site</label>
-            <input value={form.type_site} onChange={e=>setForm(p=>({...p, type_site:e.target.value}))} style={inpStyle}/>
-          </div>
-          <div style={{gridColumn:"1/-1"}}>
-            <label style={labelStyle}>Adresse du site</label>
-            <input value={form.site} onChange={e=>setForm(p=>({...p, site:e.target.value}))} style={inpStyle}/>
-          </div>
-          <div>
-            <label style={labelStyle}>Date début contrat</label>
-            <input value={form.date_debut} onChange={e=>setForm(p=>({...p, date_debut:e.target.value}))} placeholder="JJ/MM/AAAA" style={inpStyle}/>
-          </div>
-          <div>
-            <label style={labelStyle}>Date fin contrat</label>
-            <input value={form.date_fin} onChange={e=>setForm(p=>({...p, date_fin:e.target.value}))} placeholder="JJ/MM/AAAA" style={inpStyle}/>
-          </div>
-          <div>
-            <label style={labelStyle}>Passages par an</label>
-            <input type="number" value={form.passages_an} onChange={e=>setForm(p=>({...p, passages_an:e.target.value}))} style={inpStyle}/>
-          </div>
-        </div>
-
-        <div style={{ fontSize:13, fontWeight:700, color:"#f1f5f9", marginBottom:10, marginTop:6, borderTop:"1px solid #3d5270", paddingTop:16 }}>Contact 1</div>
-        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14, marginBottom:16 }}>
-          <div>
-            <label style={labelStyle}>Nom</label>
-            <input value={form.contact1_nom} onChange={e=>setForm(p=>({...p, contact1_nom:e.target.value}))} style={inpStyle}/>
-          </div>
-          <div>
-            <label style={labelStyle}>Titre / Fonction</label>
-            <input value={form.contact1_titre} onChange={e=>setForm(p=>({...p, contact1_titre:e.target.value}))} style={inpStyle}/>
-          </div>
-          <div>
-            <label style={labelStyle}>Email</label>
-            <input type="email" value={form.contact1_mail} onChange={e=>setForm(p=>({...p, contact1_mail:e.target.value}))} style={inpStyle}/>
-          </div>
-          <div>
-            <label style={labelStyle}>Téléphone</label>
-            <input value={form.contact1_tel} onChange={e=>setForm(p=>({...p, contact1_tel:e.target.value}))} style={inpStyle}/>
-          </div>
-        </div>
-
-        <div style={{ fontSize:13, fontWeight:700, color:"#f1f5f9", marginBottom:10, borderTop:"1px solid #3d5270", paddingTop:16 }}>Contact 2</div>
-        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14, marginBottom:16 }}>
-          <div>
-            <label style={labelStyle}>Nom</label>
-            <input value={form.contact2_nom} onChange={e=>setForm(p=>({...p, contact2_nom:e.target.value}))} style={inpStyle}/>
-          </div>
-          <div>
-            <label style={labelStyle}>Titre / Fonction</label>
-            <input value={form.contact2_titre} onChange={e=>setForm(p=>({...p, contact2_titre:e.target.value}))} style={inpStyle}/>
-          </div>
-          <div>
-            <label style={labelStyle}>Email</label>
-            <input type="email" value={form.contact2_mail} onChange={e=>setForm(p=>({...p, contact2_mail:e.target.value}))} style={inpStyle}/>
-          </div>
-          <div>
-            <label style={labelStyle}>Téléphone</label>
-            <input value={form.contact2_tel} onChange={e=>setForm(p=>({...p, contact2_tel:e.target.value}))} style={inpStyle}/>
-          </div>
-        </div>
-
-        <div style={{ fontSize:13, fontWeight:700, color:"#f1f5f9", marginBottom:10, borderTop:"1px solid #3d5270", paddingTop:16 }}>Certifications</div>
         <div style={{ marginBottom:16 }}>
-          <div style={{ display:"flex", flexWrap:"wrap", gap:6, marginBottom:10 }}>
-            {certifsList.map(c=>{
-              const active = certifications.includes(c);
-              return (
-                <button key={c} onClick={()=>toggleCertif(c)}
-                  style={{ background:active?"#1d4ed8":"#243352", color:active?"#fff":"#94a3b8", border:"1px solid "+(active?"#3b82f6":"#3d5270"), borderRadius:20, padding:"6px 14px", fontSize:12, fontWeight:active?700:500, cursor:"pointer", fontFamily:"inherit" }}>
-                  {active ? "✓ " : ""}{c}
-                </button>
-              );
-            })}
-          </div>
-          <div style={{ display:"flex", gap:6 }}>
-            <input value={newCertifInput} onChange={e=>setNewCertifInput(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"){e.preventDefault();addCertifOption();}}} placeholder="Ajouter une certification..." style={{...inpStyle, flex:1}}/>
-            <button onClick={addCertifOption} style={{ background:"#22c55e", color:"#fff", border:"none", borderRadius:8, padding:"9px 16px", fontSize:12, fontWeight:700, cursor:"pointer", fontFamily:"inherit" }}>+</button>
-          </div>
+          <label style={labelStyle}>Nom du client</label>
+          <input value={form.nom} onChange={e=>setForm(p=>({...p, nom:e.target.value}))} style={inpStyle}/>
         </div>
-
         <div style={{ display:"flex", gap:10, alignItems:"center" }}>
-          <button onClick={handleSave} disabled={saving}
+          <button onClick={handleSaveNom} disabled={saving}
             style={{ background:"#1d4ed8", color:"#fff", border:"none", borderRadius:8, padding:"10px 22px", fontSize:13, fontWeight:700, cursor:saving?"default":"pointer", fontFamily:"inherit", opacity:saving?0.6:1 }}>
-            {saving ? "Enregistrement..." : "Enregistrer"}
+            {saving ? "Enregistrement..." : "Enregistrer le nom"}
           </button>
           {saved && <span style={{ color:"#22c55e", fontSize:13, fontWeight:600 }}>✓ Enregistré — rechargez la page pour tout mettre à jour</span>}
         </div>
@@ -14384,6 +15190,24 @@ function AppPortail({ isAdmin, onLogout }) {
   const [showLogoEditor, setShowLogoEditor] = useState(false);
   const [showParametres, setShowParametres] = useState(false);
 
+  // Config des onglets (visibilite + ordre) persistee EN BASE (config_logos.nav_config)
+  // pour etre partagee entre appareils/techniciens. localStorage reste un cache.
+  function saveNavConfig(visible, order) {
+    var payload = { visible: visible, order: order };
+    sbFetch("config_logos?id=eq.main", "PATCH", { nav_config: payload }, { Prefer:"return=representation" })
+      .then(function(r){ if (!r || (Array.isArray(r) && r.length === 0)) { sbFetch("config_logos", "POST", { id:"main", nav_config: payload }, { Prefer:"resolution=merge-duplicates" }).catch(function(){}); } })
+      .catch(function(){});
+  }
+  useEffect(function(){
+    sbFetch("config_logos?id=eq.main","GET").then(function(data){
+      if (data && data.length>0 && data[0].nav_config) {
+        var nc = data[0].nav_config;
+        if (nc && nc.visible && typeof nc.visible==="object") { setNavVisible(function(prev){ return {...prev, ...nc.visible}; }); try { localStorage.setItem("aads_nav_visible", JSON.stringify(nc.visible)); } catch(e){} }
+        if (nc && Array.isArray(nc.order) && nc.order.length) { var miss = allNavItems.filter(function(n){ return nc.order.indexOf(n.id)<0; }).map(function(n){ return n.id; }); var ord=[...nc.order, ...miss]; setNavOrder(ord); try { localStorage.setItem("aads_nav_order", JSON.stringify(ord)); } catch(e){} }
+      }
+    }).catch(function(){});
+  }, []);
+
   const [, forceConfigUpdate] = useState(0);
   // Miroir React de SITE_ACTIF : sert de key a View pour la remonter a chaque
   // bascule, ce qui rejoue le chargement des donnees de la page.
@@ -14422,6 +15246,7 @@ function AppPortail({ isAdmin, onLogout }) {
     sbFetch("config_client?order=id.asc", "GET").then(data => {
       if (data && data.length > 0) {
         SITES_DISPO = data.map(x => ({ id: x.id, site: x.site || x.id }));
+        data.forEach(function(x){ SITES_CONFIG[x.id] = x; });
         const choisi = data.filter(x => x.id === SITE_ACTIF)[0] || data[0];
         // Premier passage sur ce navigateur : on fixe le site et on recharge une fois,
         // sinon les chargements deja partis auraient tourne sans filtre de site.
@@ -14435,6 +15260,7 @@ function AppPortail({ isAdmin, onLogout }) {
         if (cfg.nom) CLIENT_CONFIG.nom = cfg.nom;
         if (cfg.contrat) CLIENT_CONFIG.contrat = cfg.contrat;
         if (cfg.site) CLIENT_CONFIG.site = cfg.site;
+        if (cfg.adresse) CLIENT_CONFIG.adresse = cfg.adresse;
         if (cfg.type_site) CLIENT_CONFIG.type_site = cfg.type_site;
         if (cfg.date_debut) CLIENT_CONFIG.date_debut = cfg.date_debut;
         if (cfg.date_fin) CLIENT_CONFIG.date_fin = cfg.date_fin;
@@ -14459,6 +15285,17 @@ function AppPortail({ isAdmin, onLogout }) {
       if (data && data.length > 0) {
         const cfg = data[0];
         Object.keys(AADS_CONFIG).forEach(k => { if (cfg[k]) AADS_CONFIG[k] = cfg[k]; });
+        forceConfigUpdate(n => n+1);
+      }
+    }).catch(()=>{});
+    sbFetch("config_affichage?id=eq.main", "GET").then(data => {
+      if (data && data.length > 0) {
+        const cfg = data[0];
+        if (cfg.pastille_size!=null) PASTILLE_CONFIG.size = Number(cfg.pastille_size);
+        if (cfg.label_color) PASTILLE_CONFIG.labelColor = cfg.label_color;
+        if (cfg.label_size!=null) PASTILLE_CONFIG.labelSize = Number(cfg.label_size);
+        if (cfg.cercle_size!=null) PASTILLE_CONFIG.cercleSize = Number(cfg.cercle_size);
+        if (cfg.cercle_color) PASTILLE_CONFIG.cercleColor = cfg.cercle_color;
         forceConfigUpdate(n => n+1);
       }
     }).catch(()=>{});
@@ -14643,7 +15480,8 @@ function AppPortail({ isAdmin, onLogout }) {
                           const next = prev.filter(x => x !== dragId);
                           const idx2 = next.indexOf(overId);
                           next.splice(idx2, 0, dragId);
-                          try { localStorage.setItem("aads_nav_order", JSON.stringify(next)); } catch(_e) { return; }
+                          try { localStorage.setItem("aads_nav_order", JSON.stringify(next)); } catch(_e) {}
+                          saveNavConfig(navVisible, next);
                           return next;
                         });
                         navDragOver.current = null;
@@ -14669,7 +15507,8 @@ function AppPortail({ isAdmin, onLogout }) {
                 <button onClick={() => {
                   const reset = allNavItems.map(n => n.id);
                   setNavOrder(reset);
-                  try { localStorage.setItem("aads_nav_order", JSON.stringify(reset)); } catch(_e) { return; }
+                  try { localStorage.setItem("aads_nav_order", JSON.stringify(reset)); } catch(_e) {}
+                  saveNavConfig(navVisible, reset);
                 }} style={{ width:"100%", background:"transparent", color:"#5a7090", border:"1px solid #3d5270", borderRadius:6, padding:"4px 8px", fontSize:10, cursor:"pointer", fontFamily:"inherit", marginBottom:8 }}>
                   Réinitialiser l'ordre
                 </button>
@@ -14684,7 +15523,8 @@ function AppPortail({ isAdmin, onLogout }) {
                           onChange={e => {
                             const next = { ...navVisible, [item.id]: e.target.checked };
                             setNavVisible(next);
-                            try { localStorage.setItem("aads_nav_visible", JSON.stringify(next)); } catch(_e) { return; }
+                            try { localStorage.setItem("aads_nav_visible", JSON.stringify(next)); } catch(_e) {}
+                            saveNavConfig(next, navOrder);
                           }}
                           style={{ accentColor: "#3b82f6" }} />
                         <span style={{ fontSize: 11, color: item.required ? "#5a7090" : navVisible[item.id] !== false ? "#f1f5f9" : "#7a90aa" }}>{item.label}</span>
