@@ -1552,11 +1552,14 @@ function Interventions({ reinterventions, setReinterventions, passagesGlobaux, s
   const anneeLabel = (filterAnnee && filterAnnee !== "Toutes") ? filterAnnee : "Toutes les annees";
 
   const filtered = tab === "passages"       ? allEvents.filter(e => e._kind === "passage" && e.type !== "Insectes volants")
-                 : tab === "reinterventions" ? allEvents.filter(e => e._kind === "reinv")
+                 : tab === "reinterventions" ? allEvents.filter(e => e._kind === "reinv" && !estReinvAuto(e))
+                 : tab === "postconso"       ? allEvents.filter(e => e._kind === "reinv" &&  estReinvAuto(e))
                  : tab === "deiv"           ? allEvents.filter(e => e._kind === "passage" && e.type === "Insectes volants")
                  : allEvents;
 
-  const nbReinv = allEvents.filter(e=>e._kind==="reinv").length;
+  // Réinterventions "vraies" (sur anomalie) vs contrôles post-conso automatiques : deux catégories distinctes.
+  const nbReinv     = allEvents.filter(e=>e._kind==="reinv" && !estReinvAuto(e)).length;
+  const nbPostConso = allEvents.filter(e=>e._kind==="reinv" &&  estReinvAuto(e)).length;
 
   // Dernier passage periodique depuis Supabase (ou fallback PASSAGES)
   const lastPassageDate = passagesAnnee.length > 0
@@ -1568,7 +1571,7 @@ function Interventions({ reinterventions, setReinterventions, passagesGlobaux, s
 
   // Derniere reintervention
   const lastReinvDate = nbReinv > 0
-    ? allEvents.filter(e=>e._kind==="reinv").slice().sort((a, b) => {
+    ? allEvents.filter(e=>e._kind==="reinv" && !estReinvAuto(e)).slice().sort((a, b) => {
         const pd = d => { if (!d) return 0; const p = (d||"").split("/"); return p.length===3 ? new Date(p[2]+"-"+p[1]+"-"+p[0]) : new Date(d||0); };
         return pd(b.date) - pd(a.date);
       })[0].date
@@ -1636,6 +1639,7 @@ function Interventions({ reinterventions, setReinterventions, passagesGlobaux, s
         <Kpi label="Passages"         value={nbPassages}  color="#3b82f6"/>
         <Kpi label="Passages DEIV"    value={nbDeiv}           color="#f59e0b"/>
         <Kpi label="Réinterventions"  value={nbReinv}           color="#ef4444"/>
+        <Kpi label="Contrôles post-conso" value={nbPostConso}  color="#64748b"/>
         <Kpi label="Total interventions" value={passagesAnnee.length + nbReinv} color="#a78bfa"/>
         <Kpi label="Dernier passage"  value={lastPassageDate} color="#22c55e" fontSize={14}/>
         {lastReinvDate && <Kpi label="Derniere reintervention" value={lastReinvDate} color="#ef4444" fontSize={14}/>}
@@ -1644,9 +1648,9 @@ function Interventions({ reinterventions, setReinterventions, passagesGlobaux, s
       {/* Filtres onglets */}
       <div style={{ display:"flex", gap:10, flexWrap:"wrap", alignItems:"center", marginBottom:14 }}>
         <div style={{ display:"flex", gap:4, background:"#1a2540", borderRadius:10, padding:3, width:"fit-content" }}>
-          {[["tous","Tout voir"],["passages","Passages ("+nbPassages+")"],["deiv","DEIV ("+nbDeiv+")"],["reinterventions","Reinterventions ("+nbReinv+")"]].map(([id,label]) => (
+          {[["tous","Tout voir"],["passages","Passages ("+nbPassages+")"],["deiv","DEIV ("+nbDeiv+")"],["reinterventions","Reinterventions ("+nbReinv+")"],["postconso","Post-conso ("+nbPostConso+")"]].map(([id,label]) => (
             <button key={id} onClick={()=>setTab(id)}
-              style={{ background:tab===id?(id==="deiv"?"#f59e0b":"#1d4ed8"):"transparent", color:tab===id?"#fff":"#7a90aa", border:"none", borderRadius:7, padding:"6px 14px", fontSize:12, fontWeight:600, cursor:"pointer", fontFamily:"inherit" }}>
+              style={{ background:tab===id?(id==="deiv"?"#f59e0b":id==="postconso"?"#64748b":"#1d4ed8"):"transparent", color:tab===id?"#fff":"#7a90aa", border:"none", borderRadius:7, padding:"6px 14px", fontSize:12, fontWeight:600, cursor:"pointer", fontFamily:"inherit" }}>
               {label}
             </button>
           ))}
@@ -1822,30 +1826,39 @@ function Interventions({ reinterventions, setReinterventions, passagesGlobaux, s
               );
             }
 
-            // ── Réintervention ──
+            // ── Réintervention / Contrôle post-conso ──
             const r = event;
+            const isPC = estReinvAuto(r);   // suivi post-consommation = catégorie distincte (encadré BLANC, comme partout ailleurs)
+            const dotColor     = isPC ? "#ffffff" : "#ef4444";
+            const dotBorder    = isPC ? "2px solid #94a3b8" : "3px solid #1a2540";
+            const dotLetterCol = isPC ? "#475569" : "#fff";
+            const dotLetter    = isPC ? "C" : "R";
             return (
               <div key={key} style={{ position:"relative", paddingLeft:44 }}>
-                {/* Dot réintervention */}
-                <div style={{ position:"absolute", left:10, top:16, width:18, height:18, borderRadius:"50%", background:"#ef4444", border:"3px solid #1a2540", zIndex:1, display:"flex", alignItems:"center", justifyContent:"center" }}>
-                  <span style={{ fontSize:8, fontWeight:900, color:"#fff" }}>R</span>
+                {/* Pastille : BLANCHE "C" pour un contrôle post-conso, rouge "R" pour une réintervention */}
+                <div style={{ position:"absolute", left:10, top:16, width:18, height:18, borderRadius:"50%", background:dotColor, border:dotBorder, zIndex:1, display:"flex", alignItems:"center", justifyContent:"center" }}>
+                  <span style={{ fontSize:8, fontWeight:900, color:dotLetterCol }}>{dotLetter}</span>
                 </div>
                 <Card selected={isOpen} onClick={() => setSel(isOpen ? null : key)}
-                  style={{ borderLeft:"3px solid #ef444444" }}>
+                  style={ isPC ? { background:"#ffffff", border:"1px solid #94a3b8" } : { borderLeft:"3px solid #ef444444" } }>
                   <div style={{ display:"flex", flexWrap:"wrap", gap:10, alignItems:"center" }}>
-                    <div style={{ minWidth:90, fontSize:13, fontWeight:700, color:"#fca5a5", fontFamily:"monospace" }}>{r.date}</div>
+                    <div style={{ minWidth:90, fontSize:13, fontWeight:700, color:isPC?"#334155":"#fca5a5", fontFamily:"monospace" }}>{r.date}</div>
                     <div style={{ flex:1 }}>
                       <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-                        <div style={{ fontSize:14, fontWeight:700, color:"#f1f5f9" }}>{r.technicien}</div>
-                        <span style={{ fontSize:10, fontWeight:700, background:"#ef444422", color:"#ef4444", border:"1px solid #ef444444", borderRadius:10, padding:"1px 8px" }}>RÉINTERVENTION</span>
+                        <div style={{ fontSize:14, fontWeight:700, color:isPC?"#334155":"#f1f5f9" }}>{r.technicien}</div>
+                        {isPC
+                          ? <span style={{ fontSize:9, fontWeight:800, letterSpacing:0.4, textTransform:"uppercase", background:"#e2e8f0", color:"#475569", border:"1px solid #cbd5e1", borderRadius:4, padding:"2px 7px" }}>Contrôle post-conso</span>
+                          : <span style={{ fontSize:10, fontWeight:700, background:"#ef444422", color:"#ef4444", border:"1px solid #ef444444", borderRadius:10, padding:"1px 8px" }}>RÉINTERVENTION</span>}
                       </div>
-                      <div style={{ fontSize:12, color:"#7a90aa" }}>Postes : {r.poste}</div>
+                      <div style={{ fontSize:12, color:isPC?"#64748b":"#7a90aa" }}>Postes : {r.poste}</div>
                     </div>
-                    {toArraySafe(r.actions).slice(0,2).map(a => (
+                    {!isPC && toArraySafe(r.actions).slice(0,2).map(a => (
                       <span key={a} style={{ fontSize:10, fontWeight:600, background:"#1d4ed822", color:"#3b82f6", border:"1px solid #3b82f644", borderRadius:4, padding:"2px 7px" }}>{a}</span>
                     ))}
-                    {toArraySafe(r.actions).length > 2 && <span style={{ fontSize:10, color:"#7a90aa" }}>+{toArraySafe(r.actions).length-2}</span>}
-                    <Badge label={r.statut||"En cours"} color={SREINV[r.statut]||"#7a90aa"}/>
+                    {!isPC && toArraySafe(r.actions).length > 2 && <span style={{ fontSize:10, color:"#7a90aa" }}>+{toArraySafe(r.actions).length-2}</span>}
+                    {isPC
+                      ? <span style={{ fontSize:10, fontWeight:700, color:"#16a34a", background:"#16a34a15", border:"1px solid #16a34a44", borderRadius:10, padding:"1px 8px" }}>Non consommé</span>
+                      : <Badge label={r.statut||"En cours"} color={SREINV[r.statut]||"#7a90aa"}/>}
                     <button onClick={e => { e.stopPropagation(); deleteReinv(r.id); setSel(null); }}
                       style={{ background:"#ef444422", color:"#ef4444", border:"1px solid #ef444444", borderRadius:7, padding:"3px 9px", fontSize:11, fontWeight:700, cursor:"pointer", fontFamily:"inherit" }}>✕</button>
                   </div>
@@ -1854,7 +1867,7 @@ function Interventions({ reinterventions, setReinterventions, passagesGlobaux, s
                       {r.observations}
                     </div>
                   )}
-                  {isOpen && r.anomalie && (
+                  {isOpen && !isPC && r.anomalie && (
                     <div style={{ marginTop:8, background:"#ef444411", border:"1px solid #ef444433", borderRadius:8, padding:"8px 12px", fontSize:12, color:"#fca5a5" }}>
                       <strong>Anomalie :</strong> {r.anomalie}
                     </div>
