@@ -15501,9 +15501,18 @@ function AppPortail({ isAdmin, onLogout }) {
       });
     });
     // Nettoyage : supprime les controles AUTO (id "reinv_...") dont le passage
-    // n existe plus ou n a plus de consommation. Preserve les controles manuels
-    // (id numerique) et les dates historiques d un passage toujours consomme.
-    const orphelins = (reinterventions||[]).filter(r => { const id=String(r.id||""); if(id.indexOf("reinv_")!==0) return false; const pid=passageIdDe(id); return !allPassageIds.has(pid); });
+    // n existe plus. Preserve les controles manuels (id numerique).
+    // SECURITE MULTI-SITES (critique) : on ne juge "orphelin" qu un controle dont
+    // le SITE fait partie des passages actuellement charges (site courant). Sinon,
+    // au moment ou l on change de site, les controles d un AUTRE site (encore en
+    // memoire mais dont les passages ne sont plus charges) seraient supprimes a tort
+    // -> perte de donnees. On ne nettoie donc que dans le perimetre du site charge.
+    const sitesCharges = new Set(passagesGlobaux.map(p => String(p.site||"")));
+    const orphelins = (reinterventions||[]).filter(r => {
+      const id=String(r.id||""); if(id.indexOf("reinv_")!==0) return false;
+      if(!sitesCharges.has(String(r.site||""))) return false;   // autre site -> on ne touche pas
+      const pid=passageIdDe(id); return !allPassageIds.has(pid);
+    });
     if (nouv.length) nouv.forEach(r => sbUpsert("reinterventions", r));
     if (orphelins.length) orphelins.forEach(r => sbDelete("reinterventions", r.id));
     if (nouv.length || orphelins.length) {
