@@ -7491,8 +7491,9 @@ function SaisiePassage({ seuilsGlobaux, setSeuilsGlobaux, setReinterventions, se
     setReinvForm({ date: (r.date||"").includes("/")?(r.date.split("/").reverse().join("-")):(r.date||""),
                    technicien:r.technicien||"", poste:r.poste||"", anomalie:r.anomalie||"Non consommé",
                    statut:r.statut||"Terminé", observations:r.observations||"", actions:[] });
-    setEditingReinv(r.id); setReinvPhotos([]); setShowReinvForm(true);
-    setActiveTab("liste_tab");
+    setEditingReinv(r.id); setReinvPhotos([]);
+    // Le formulaire de reintervention vit dans l onglet Saisie (vue liste) : on s y place.
+    setActiveTab("saisie_tab"); setView("liste"); setShowReinvForm(true);
   }
   function deleteReinv(rid) {
     sbDelete("reinterventions", rid);
@@ -8189,7 +8190,7 @@ function SaisiePassage({ seuilsGlobaux, setSeuilsGlobaux, setReinterventions, se
 
           {showReinvForm && view==="liste" && (
             <Card style={{marginBottom:16}}>
-              <div style={{fontSize:14,fontWeight:700,color:"#f1f5f9",marginBottom:14}}>Nouvelle reintervention</div>
+              <div style={{fontSize:14,fontWeight:700,color:"#f1f5f9",marginBottom:14}}>{editingReinv ? "Modifier le contrôle / réintervention" : "Nouvelle reintervention"}</div>
               <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:10,marginBottom:10}}>
                 <div><label style={{fontSize:10,color:"#7a90aa",fontWeight:600,textTransform:"uppercase",display:"block",marginBottom:3}}>Date *</label>
                   <input type="date" value={reinvForm.date} onChange={e=>setReinvForm(p=>({...p,date:e.target.value}))} style={inpStyle}/></div>
@@ -8242,7 +8243,7 @@ function SaisiePassage({ seuilsGlobaux, setSeuilsGlobaux, setReinterventions, se
               </div>
               <div style={{display:"flex",gap:8}}>
                 <button className="aads-action-btn" onClick={submitReinv} style={{background:"#ef4444",color:"#fff",border:"none",borderRadius:8,padding:"8px 16px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Enregistrer</button>
-                <button onClick={()=>setShowReinvForm(false)} style={{background:"transparent",color:"#7a90aa",border:"1px solid #3d5270",borderRadius:8,padding:"8px 16px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>Annuler</button>
+                <button onClick={()=>{setShowReinvForm(false);setEditingReinv(null);}} style={{background:"transparent",color:"#7a90aa",border:"1px solid #3d5270",borderRadius:8,padding:"8px 16px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>Annuler</button>
               </div>
             </Card>
           )}
