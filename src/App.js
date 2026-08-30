@@ -2404,7 +2404,7 @@ function Cartographie({ seuilsGlobaux }) {
                       const saisiesP = typeof pa.saisies==="string"?JSON.parse(pa.saisies||"{}"):pa.saisies||{};
                       const mol = saisiesP[displaySel.id]?.molecule;
                       if (!mol) return null;
-                      const molColor = mol==="Placebo"?"#3b82f6":"#8b5cf6";
+                      const molColor = estPlaceboMol(mol)?"#3b82f6":"#8b5cf6";
                       return <span style={{background:molColor+"22",color:molColor,border:"1px solid "+molColor+"44",borderRadius:4,padding:"1px 7px",fontSize:9,fontWeight:700}}>{mol}</span>;
                     })()}
                   </div>
@@ -8531,7 +8531,7 @@ function SaisiePassage({ seuilsGlobaux, setSeuilsGlobaux, setReinterventions, se
           ...postes.filter(p=>(p.nuisible||"Rongeurs")==="Rongeurs").map(p=>p.molecule_actuelle).filter(Boolean),
           ...passagesData.flatMap(pa=>{ const s=typeof pa.saisies==="string"?JSON.parse(pa.saisies||"{}"):pa.saisies||{}; return Object.values(s).map(x=>x?.molecule).filter(Boolean); })
         ])];
-        const getMolColor = mol => { if(!mol)return "#3d5270"; if(mol==="Placebo")return "#3b82f6"; if(/^dif/i.test(mol))return "#f59e0b"; if(/^brod/i.test(mol))return "#ef4444"; const others=allMols.filter(m=>m!=="Placebo"&&!/^dif/i.test(m)&&!/^brod/i.test(m)); const idx=others.indexOf(mol); return idx>=0?MOL_COLORS[idx%MOL_COLORS.length]:"#7a90aa"; };
+        const getMolColor = mol => { if(!mol)return "#3d5270"; if(estPlaceboMol(mol))return "#3b82f6"; if(/^dif/i.test(mol))return "#f59e0b"; if(/^brod/i.test(mol))return "#ef4444"; const others=allMols.filter(m=>!estPlaceboMol(m)&&!/^dif/i.test(m)&&!/^brod/i.test(m)); const idx=others.indexOf(mol); return idx>=0?MOL_COLORS[idx%MOL_COLORS.length]:"#7a90aa"; };
 
         // Tri naturel des postes : RE1,RE2,...RE10,RE11 puis RI1,...
         function sortNaturel(arr) {
