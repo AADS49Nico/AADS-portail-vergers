@@ -1118,6 +1118,7 @@ function ExportBtn({ onClick, label }) {
 // ============================================================
 function Dashboard({ onNav, reinterventions, onLogoClick, onParamsClick, passagesGlobaux, seuilsGlobaux }) {
   const [localPassages, setLocalPassages] = useState([]);
+  const [localReinterv, setLocalReinterv] = useState([]);   // charge en propre (independant du timing racine)
   const [filterYear, setFilterYear] = useState(null);
   const [postesTotal, setPostesTotal] = useState(0);
   const [postesListe, setPostesListe] = useState([]);
@@ -1128,6 +1129,9 @@ function Dashboard({ onNav, reinterventions, onLogoClick, onParamsClick, passage
         if (data && data.length > 0) setLocalPassages(data);
       }).catch(()=>{});
     }
+    sbGet("reinterventions").then(data => {
+      if (data && data.length > 0) setLocalReinterv(data);
+    }).catch(()=>{});
     sbGet("postes").then(data => {
       if (data && data.length > 0) { var actifs = data.filter(function(p){ return p.statut !== "Désactivé"; }); setPostesTotal(actifs.length); setPostesListe(actifs); }
     }).catch(()=>{});
@@ -1172,8 +1176,9 @@ function Dashboard({ onNav, reinterventions, onLogoClick, onParamsClick, passage
   const passagesSorted = passagesSource.filter(p=>p.type!=="Insectes volants" && matchYear(p)).slice().sort((a,b)=>pd(b.date)-pd(a.date));
   const passagesDeivSorted = passagesSource.filter(p=>p.type==="Insectes volants" && matchYear(p)).slice().sort((a,b)=>pd(b.date)-pd(a.date));
   // Reinterventions "reelles" (sur anomalie) vs suivis automatiques post-conso.
-  const reinterventionsAnnee = (reinterventions||[]).filter(r=>matchYear(r) && !estReinvAuto(r));
-  const suivisPostConso      = (reinterventions||[]).filter(r=>matchYear(r) &&  estReinvAuto(r));
+  const reintervEff = (reinterventions && reinterventions.length) ? reinterventions : localReinterv;
+  const reinterventionsAnnee = (reintervEff||[]).filter(r=>matchYear(r) && !estReinvAuto(r));
+  const suivisPostConso      = (reintervEff||[]).filter(r=>matchYear(r) &&  estReinvAuto(r));
   const last = passagesSorted[0] || { anomalies:0, conso_totale:0, conso_partielle:0, date:"—", statut:"—" };
   const lastDeiv = passagesDeivSorted[0] || null;
 
@@ -2289,10 +2294,25 @@ function Cartographie({ seuilsGlobaux }) {
               ))}
             </div>
             <div style={{ fontSize: 11, color: "#7a90aa", fontWeight: 700, textTransform: "uppercase", marginBottom: 8 }}>Historique</div>
-            {Object.entries(displaySel.passages).sort((a,b)=>{
+            {[
+              ...Object.entries(displaySel.passages),
+              ...suivisPostConsoDuPoste(displaySel.id).map(r=>[r.date, {__pc:r}]),
+            ].sort((a,b)=>{
               const pd=d=>{const p=(d||"").split("/");return p.length===3?new Date(p[2]+"-"+p[1]+"-"+p[0]):new Date(0);};
               return pd(b[0])-pd(a[0]);
             }).map(([d, etat]) => {
+              // Controle post-consommation intercale (encadre blanc)
+              if (etat && etat.__pc) {
+                const r = etat.__pc;
+                return (
+                  <div key={"pc_"+r.id} style={{ background:"#ffffff", border:"1px solid #94a3b8", borderRadius:8, padding:"8px 12px", marginBottom:6, display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }} onClick={e=>e.stopPropagation()}>
+                    <span style={{ fontSize:11, fontFamily:"monospace", color:"#334155", fontWeight:700 }}>{r.date}</span>
+                    <span style={{ fontSize:9, fontWeight:800, letterSpacing:0.4, textTransform:"uppercase", color:"#475569", background:"#e2e8f0", border:"1px solid #cbd5e1", borderRadius:4, padding:"1px 6px" }}>Contrôle post-conso</span>
+                    <span style={{ fontSize:10, fontWeight:700, color:"#16a34a" }}>Non consommé</span>
+                    {r.technicien && <span style={{ fontSize:10, color:"#64748b" }}>{r.technicien}</span>}
+                  </div>
+                );
+              }
               const val = editingConso ? consoEdit[d] : etat;
               const isInsecte = INSECTES_TYPES.includes(displaySel.nuisible || "");
               const appat = (displaySel.appat || "").toLowerCase();
@@ -2378,24 +2398,6 @@ function Cartographie({ seuilsGlobaux }) {
                 </div>
               );
             })}
-            {/* Suivis post-consommation concernant ce poste (encadre blanc) */}
-            {(() => {
-              const sp = suivisPostConsoDuPoste(displaySel.id);
-              if (!sp.length) return null;
-              return (
-                <div style={{ marginTop: 10 }}>
-                  <div style={{ fontSize: 11, color: "#7a90aa", fontWeight: 700, textTransform: "uppercase", marginBottom: 8 }}>Contrôles post-consommation ({sp.length})</div>
-                  {sp.map(r => (
-                    <div key={r.id} style={{ background:"#ffffff", border:"1px solid #94a3b8", borderRadius:8, padding:"7px 12px", marginBottom:6, display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }} onClick={e=>e.stopPropagation()}>
-                      <span style={{ fontSize:11, fontFamily:"monospace", color:"#334155", fontWeight:700 }}>{r.date}</span>
-                      <span style={{ fontSize:9, fontWeight:800, letterSpacing:0.4, textTransform:"uppercase", color:"#475569", background:"#e2e8f0", border:"1px solid #cbd5e1", borderRadius:4, padding:"1px 6px" }}>Post-conso</span>
-                      <span style={{ fontSize:10, fontWeight:700, color:"#16a34a" }}>Non consommé</span>
-                      {r.technicien && <span style={{ fontSize:10, color:"#64748b" }}>{r.technicien}</span>}
-                    </div>
-                  ))}
-                </div>
-              );
-            })()}
           </Card>
         )}
       </div>
@@ -7353,6 +7355,7 @@ function SaisiePassage({ seuilsGlobaux, setSeuilsGlobaux, setReinterventions, se
   const [produitsBiocides, setProduitsBiocides] = useState([]);
   const [showReinvForm, setShowReinvForm] = useState(false);
   const [reinvForm, setReinvForm] = useState({ date:"", technicien:"", poste:"", anomalie:"", statut:"En cours", observations:"", actions:[] });
+  const [editingReinv, setEditingReinv] = useState(null);   // id du controle post-conso en cours d edition
   const [reinvPhotos, setReinvPhotos] = useState([]);
   const [activeTab, setActiveTab] = useState("saisie_tab");
   const [filterTypeMol, setFilterTypeMol] = useState("tous");
@@ -7472,15 +7475,29 @@ function SaisiePassage({ seuilsGlobaux, setSeuilsGlobaux, setReinterventions, se
   function submitReinv() {
     if (!reinvForm.date) { alert("La date est obligatoire"); return; }
     const dateFmt = reinvForm.date.includes("-")?reinvForm.date.split("-").reverse().join("/"):reinvForm.date;
-    const id = String(Date.now());
-    const newReinv = {id, contrat:CLIENT_CONFIG.contrat, date:dateFmt, technicien:reinvForm.technicien, poste:reinvForm.poste, anomalie:reinvForm.anomalie, statut:reinvForm.statut, observations:reinvForm.observations, actions:JSON.stringify(reinvForm.actions), photos:JSON.stringify(reinvPhotos)};
-    sbUpsert("reinterventions", newReinv);
+    const id = editingReinv || String(Date.now());   // edition -> meme id ; sinon nouveau
+    const rec = {id, contrat:CLIENT_CONFIG.contrat, date:dateFmt, technicien:reinvForm.technicien, poste:reinvForm.poste, anomalie:reinvForm.anomalie, statut:reinvForm.statut, observations:reinvForm.observations, actions:JSON.stringify(reinvForm.actions), photos:JSON.stringify(reinvPhotos)};
+    sbUpsert("reinterventions", rec);
+    const withArrays = {...rec, actions:reinvForm.actions, photos:reinvPhotos};
+    setReintervData(prev => { const rest=(prev||[]).filter(x=>String(x.id)!==String(id)); return [withArrays, ...rest]; });
     if (typeof setReinterventions === "function") {
-      setReinterventions(prev => [{...newReinv, actions:reinvForm.actions, photos:reinvPhotos}, ...prev]);
+      setReinterventions(prev => { const rest=(prev||[]).filter(x=>String(x.id)!==String(id)); return [withArrays, ...rest]; });
     }
-    setShowReinvForm(false);
+    setShowReinvForm(false); setEditingReinv(null);
     setReinvForm({date:"",technicien:"",poste:"",anomalie:"",statut:"En cours",observations:"",actions:[]});
     setReinvPhotos([]);
+  }
+  function editReinv(r) {
+    setReinvForm({ date: (r.date||"").includes("/")?(r.date.split("/").reverse().join("-")):(r.date||""),
+                   technicien:r.technicien||"", poste:r.poste||"", anomalie:r.anomalie||"Non consommé",
+                   statut:r.statut||"Terminé", observations:r.observations||"", actions:[] });
+    setEditingReinv(r.id); setReinvPhotos([]); setShowReinvForm(true);
+    setActiveTab("liste_tab");
+  }
+  function deleteReinv(rid) {
+    sbDelete("reinterventions", rid);
+    setReintervData(prev => (prev||[]).filter(x=>String(x.id)!==String(rid)));
+    if (typeof setReinterventions === "function") setReinterventions(prev => (prev||[]).filter(x=>String(x.id)!==String(rid)));
   }
 
   function sortPostes(list, ignorePrefix) {
@@ -7616,9 +7633,13 @@ function SaisiePassage({ seuilsGlobaux, setSeuilsGlobaux, setReinterventions, se
                   <div>
                     <div style={{fontSize:13,fontWeight:700,color:"#334155"}}>{p.date}</div>
                     <div style={{fontSize:11,color:"#64748b"}}>{p.technicien} — <span style={{fontWeight:700,color:"#475569"}}>Contrôle post conso</span></div>
-                    {p.poste && <div style={{fontSize:10,color:"#64748b",marginTop:2}}>Postes : {p.poste} · Non consommé</div>}
+                    {p.poste && <div style={{fontSize:10,color:"#64748b",marginTop:2}}>Postes : {p.poste} · {p.anomalie||"Non consommé"}</div>}
                   </div>
-                  <span style={{fontSize:9,fontWeight:800,letterSpacing:0.4,textTransform:"uppercase",color:"#475569",background:"#e2e8f0",border:"1px solid #cbd5e1",borderRadius:4,padding:"2px 7px"}}>Post-conso</span>
+                  <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                    <span style={{fontSize:9,fontWeight:800,letterSpacing:0.4,textTransform:"uppercase",color:"#475569",background:"#e2e8f0",border:"1px solid #cbd5e1",borderRadius:4,padding:"2px 7px"}}>Post-conso</span>
+                    <button onClick={()=>editReinv(p)} style={{background:"#1d4ed822",color:"#3b82f6",border:"1px solid #3b82f644",borderRadius:6,padding:"4px 10px",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Modifier</button>
+                    <button onClick={()=>{ if(window.confirm("Supprimer ce contrôle post-conso ?")) deleteReinv(p.id); }} style={{background:"#ef444422",color:"#ef4444",border:"1px solid #ef444433",borderRadius:6,padding:"4px 8px",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Supprimer</button>
+                  </div>
                 </div>
               </Card>
             ) : (
