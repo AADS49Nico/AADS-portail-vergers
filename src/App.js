@@ -809,6 +809,17 @@ export function toArraySafe(v) {
 }
 // Normalise une reintervention lue de la base : actions/photos en tableaux.
 export function normReinterv(r) { return { ...r, actions: toArraySafe(r.actions), photos: toArraySafe(r.photos) }; }
+// Id du passage PARENT d un controle post-conso : les controles auto ont l id
+// "reinv_<idPassage>_<idx>". Renvoie l id du passage parent, ou null si ce n est
+// pas un controle auto. Sert a rattacher CHAQUE controle a SON passage (et pas
+// a tous les passages proches dans le temps).
+export function passageIdDe(id) {
+  id = String(id||"");
+  if (id.indexOf("reinv_") !== 0) return null;
+  const rest = id.slice(6);
+  const li = rest.lastIndexOf("_");
+  return li > 0 ? rest.slice(0, li) : rest;
+}
 // --- Jours feries francais (metropole) : fixes + mobiles (Paques/Ascension/Pentecote) ---
 var _feriesCache = {};
 function _paquesFR(y){
@@ -1692,9 +1703,15 @@ function Interventions({ reinterventions, setReinterventions, passagesGlobaux, s
               const tauxAct = nbPostesTotal > 0 ? Math.round(anomalies / nbPostesTotal * 100) : 0;
               const lvlColor = tauxAct >= SEUILS.critique ? "#ef4444" : tauxAct >= SEUILS.alerte ? "#f59e0b" : "#22c55e";
               const actifs   = POSTES_INIT.filter(po => po.passages[p.date]);
-              // Réinterventions liées à ce passage (même mois ou postérieures proches)
+              // Rattachement à CE passage :
+              //  - contrôles post-conso : par id parent (reinv_<idPassage>_<idx>) —
+              //    précis, chaque contrôle va sur SON passage (plus de fenêtre 45 j
+              //    qui ramassait les chaînes d'autres passages proches dans le temps) ;
+              //  - réinterventions "vraies" (manuelles) : fenêtre de 45 jours après.
               const pDate = parseDate(p.date);
+              const pcLiees = (reinterventions||[]).filter(r => estReinvAuto(r) && passageIdDe(r.id) === String(p.id));
               const reinvLiees = (reinterventions||[]).filter(r => {
+                if (estReinvAuto(r)) return false;
                 const rd = parseDate(r.date);
                 const diff = (rd - pDate) / (1000*60*60*24);
                 return diff >= 0 && diff <= 45;
@@ -1740,6 +1757,11 @@ function Interventions({ reinterventions, setReinterventions, passagesGlobaux, s
                       {reinvLiees.length > 0 && (
                         <span style={{ fontSize:10, fontWeight:700, background:"#ef444422", color:"#ef4444", border:"1px solid #ef444444", borderRadius:10, padding:"1px 8px" }}>
                           {reinvLiees.length} réintervention(s)
+                        </span>
+                      )}
+                      {pcLiees.length > 0 && (
+                        <span style={{ fontSize:10, fontWeight:700, background:"#e2e8f0", color:"#475569", border:"1px solid #cbd5e1", borderRadius:10, padding:"1px 8px" }}>
+                          {pcLiees.length} contrôle(s) post-conso
                         </span>
                       )}
                     </div>
@@ -1796,26 +1818,30 @@ function Interventions({ reinterventions, setReinterventions, passagesGlobaux, s
                           <div style={{ background:"#ef444408", border:"1px solid #ef444422", borderRadius:10, padding:"10px 14px" }}>
                             <div style={{ fontSize:11, fontWeight:700, color:"#ef4444", marginBottom:8 }}>Réinterventions associées ({reinvLiees.length})</div>
                             <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
-                              {reinvLiees.map(r => {
-                                const auto = estReinvAuto(r);
-                                // Suivi post-consommation : encadre BLANC + liseré, lecture "routine".
-                                return auto ? (
-                                  <div key={r.id} style={{ display:"flex", flexWrap:"wrap", gap:10, alignItems:"center", background:"#ffffff", border:"1px solid #94a3b8", borderRadius:8, padding:"8px 12px" }}>
-                                    <span style={{ fontSize:12, fontFamily:"monospace", color:"#334155", fontWeight:700 }}>{r.date}</span>
-                                    <span style={{ fontSize:9, fontWeight:800, letterSpacing:0.4, textTransform:"uppercase", color:"#475569", background:"#e2e8f0", border:"1px solid #cbd5e1", borderRadius:4, padding:"1px 6px" }}>Suivi post-conso</span>
-                                    <span style={{ fontSize:12, color:"#334155", flex:1 }}>{r.technicien}</span>
-                                    <span style={{ fontSize:11, color:"#64748b" }}>Postes : {r.poste}</span>
-                                    <span style={{ fontSize:10, fontWeight:700, color:"#16a34a" }}>Non consommé</span>
-                                  </div>
-                                ) : (
-                                  <div key={r.id} style={{ display:"flex", flexWrap:"wrap", gap:10, alignItems:"center", background:"#1a2540", borderRadius:8, padding:"8px 12px" }}>
-                                    <span style={{ fontSize:12, fontFamily:"monospace", color:"#fca5a5", fontWeight:700 }}>{r.date}</span>
-                                    <span style={{ fontSize:12, color:"#f1f5f9", flex:1 }}>{r.technicien}</span>
-                                    <span style={{ fontSize:11, color:"#7a90aa" }}>Postes : {r.poste}</span>
-                                    {r.statut && <Badge label={r.statut} color={SREINV[r.statut]||"#7a90aa"}/>}
-                                  </div>
-                                );
-                              })}
+                              {reinvLiees.map(r => (
+                                <div key={r.id} style={{ display:"flex", flexWrap:"wrap", gap:10, alignItems:"center", background:"#1a2540", borderRadius:8, padding:"8px 12px" }}>
+                                  <span style={{ fontSize:12, fontFamily:"monospace", color:"#fca5a5", fontWeight:700 }}>{r.date}</span>
+                                  <span style={{ fontSize:12, color:"#f1f5f9", flex:1 }}>{r.technicien}</span>
+                                  <span style={{ fontSize:11, color:"#7a90aa" }}>Postes : {r.poste}</span>
+                                  {r.statut && <Badge label={r.statut} color={SREINV[r.statut]||"#7a90aa"}/>}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                        {pcLiees.length > 0 && (
+                          <div style={{ background:"#f8fafc", border:"1px solid #cbd5e1", borderRadius:10, padding:"10px 14px", marginTop: reinvLiees.length>0?8:0 }}>
+                            <div style={{ fontSize:11, fontWeight:700, color:"#475569", marginBottom:8 }}>Contrôles post-conso associés ({pcLiees.length})</div>
+                            <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+                              {pcLiees.slice().sort((a,b)=>parseDate(a.date)-parseDate(b.date)).map(r => (
+                                <div key={r.id} style={{ display:"flex", flexWrap:"wrap", gap:10, alignItems:"center", background:"#ffffff", border:"1px solid #94a3b8", borderRadius:8, padding:"8px 12px" }}>
+                                  <span style={{ fontSize:12, fontFamily:"monospace", color:"#334155", fontWeight:700 }}>{r.date}</span>
+                                  <span style={{ fontSize:9, fontWeight:800, letterSpacing:0.4, textTransform:"uppercase", color:"#475569", background:"#e2e8f0", border:"1px solid #cbd5e1", borderRadius:4, padding:"1px 6px" }}>Contrôle post-conso</span>
+                                  <span style={{ fontSize:12, color:"#334155", flex:1 }}>{r.technicien}</span>
+                                  <span style={{ fontSize:11, color:"#64748b" }}>Postes : {r.poste}</span>
+                                  <span style={{ fontSize:10, fontWeight:700, color:"#16a34a" }}>Non consommé</span>
+                                </div>
+                              ))}
                             </div>
                           </div>
                         )}
