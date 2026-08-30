@@ -15380,15 +15380,8 @@ function AppPortail({ isAdmin, onLogout }) {
   const [reinterventions, setReinterventions] = useState(REINIT_INIT);
   const [passagesGlobaux, setPassagesGlobaux] = useState([]);
 
-  // Chargement initial des passages au niveau App pour alimenter le Dashboard immédiatement
-  useEffect(() => {
-    sbGet("passages").then(data => {
-      if (data && data.length > 0) setPassagesGlobaux(data);
-    }).catch(()=>{});
-    sbGet("reinterventions").then(data => {
-      if (data && data.length > 0) setReinterventions(data);
-    }).catch(()=>{});
-  }, []);
+  // (Le chargement passages + reinterventions, recharge par site, est defini
+  //  plus bas — apres la declaration de siteCourant.)
 
   // Génération automatique des réinterventions post-consommation (Vergers only).
   // Regle : J+2, J+2, J+2 puis J+7 en JOURS OUVRES apres le dernier controle,
@@ -15523,6 +15516,13 @@ function AppPortail({ isAdmin, onLogout }) {
   // Miroir React de SITE_ACTIF : sert de key a View pour la remonter a chaque
   // bascule, ce qui rejoue le chargement des donnees de la page.
   const [siteCourant, setSiteCourant] = useState(SITE_ACTIF);
+  // Chargement des passages + reinterventions au niveau App, RECHARGE a chaque
+  // changement de site. Indispensable pour que la generation auto des controles
+  // post-conso se declenche sur CHAQUE site (pas seulement le 1er au demarrage).
+  useEffect(() => {
+    sbGet("passages").then(data => { setPassagesGlobaux(Array.isArray(data) ? data : []); }).catch(()=>{ setPassagesGlobaux([]); });
+    sbGet("reinterventions").then(data => { setReinterventions(Array.isArray(data) ? data : []); }).catch(()=>{ setReinterventions([]); });
+  }, [siteCourant]);
   const mainRef = React.useRef(null);
   const scrollAvantSite = React.useRef(0);
   const [, forceSitesRefresh] = useState(0);
