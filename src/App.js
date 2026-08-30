@@ -1912,7 +1912,7 @@ function Interventions({ reinterventions, setReinterventions, passagesGlobaux, s
                     </div>
                   )}
                   {isOpen && (() => {
-                    const photos = typeof r.photos==="string" ? JSON.parse(r.photos||"[]") : (r.photos||[]);
+                    const photos = toArraySafe(r.photos);
                     if (!photos.length) return null;
                     return (
                       <div style={{marginTop:10,display:"flex",flexWrap:"wrap",gap:6}}>
@@ -15510,7 +15510,9 @@ function AppPortail({ isAdmin, onLogout }) {
     const sitesCharges = new Set(passagesGlobaux.map(p => String(p.site||"")));
     const orphelins = (reinterventions||[]).filter(r => {
       const id=String(r.id||""); if(id.indexOf("reinv_")!==0) return false;
-      if(!sitesCharges.has(String(r.site||""))) return false;   // autre site -> on ne touche pas
+      const rSite=String(r.site||"").trim();
+      if(!rSite) return false;                                  // site inconnu -> on ne supprime JAMAIS
+      if(!sitesCharges.has(rSite)) return false;                // autre site -> on ne touche pas
       const pid=passageIdDe(id); return !allPassageIds.has(pid);
     });
     if (nouv.length) nouv.forEach(r => sbUpsert("reinterventions", r));
