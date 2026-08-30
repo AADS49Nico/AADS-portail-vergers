@@ -1562,14 +1562,24 @@ function Interventions({ reinterventions, setReinterventions, passagesGlobaux, s
   const nbPassages = passagesAnnee.length - nbDeiv;
   const anneeLabel = (filterAnnee && filterAnnee !== "Toutes") ? filterAnnee : "Toutes les annees";
 
+  // Ids des passages actuellement affichés (pour savoir si un contrôle post-conso
+  // est déjà imbriqué sous son parent, et éviter le doublon en "Tout voir").
+  const passageIdsAffiches = new Set(allEvents.filter(e => e._kind === "passage").map(e => String(e.id)));
+
   const filtered = tab === "passages"       ? allEvents.filter(e => e._kind === "passage" && e.type !== "Insectes volants")
                  : tab === "reinterventions" ? allEvents.filter(e => e._kind === "reinv" && !estReinvAuto(e))
                  : tab === "postconso"       ? allEvents.filter(e => e._kind === "reinv" &&  estReinvAuto(e))
                  : tab === "deiv"           ? allEvents.filter(e => e._kind === "passage" && e.type === "Insectes volants")
-                 // "Tout voir" : on N'AFFICHE PAS les contrôles post-conso en ligne autonome
-                 // (ils sont déjà listés sous leur passage parent, au clic) -> plus de doublon.
-                 // Ils restent accessibles à plat dans l'onglet dédié "Post-conso".
-                 : allEvents.filter(e => !(e._kind === "reinv" && estReinvAuto(e)));
+                 // "Tout voir" : on masque un contrôle post-conso en ligne autonome UNIQUEMENT
+                 // s'il est déjà listé sous son passage parent affiché (id reinv_<passage>_<idx>)
+                 // -> plus de doublon pour les contrôles auto. Une SAISIE MANUELLE (id numérique,
+                 // sans parent) n'est rattachée nulle part : on la garde donc visible ici pour ne
+                 // pas la perdre. Tous restent aussi accessibles à plat dans l'onglet "Post-conso".
+                 : allEvents.filter(e => {
+                     if (!(e._kind === "reinv" && estReinvAuto(e))) return true;
+                     const parent = passageIdDe(e.id);
+                     return !(parent && passageIdsAffiches.has(parent));
+                   });
 
   // Réinterventions "vraies" (sur anomalie) vs contrôles post-conso automatiques : deux catégories distinctes.
   const nbReinv     = allEvents.filter(e=>e._kind==="reinv" && !estReinvAuto(e)).length;
@@ -2196,7 +2206,7 @@ function Cartographie({ seuilsGlobaux }) {
           <div style={{ fontSize: 13, color: "#7a90aa" }}>{postesAvecPassages.length} postes</div>
         </div>
         <div style={{ display:"flex", gap:8, alignItems:"center" }}>
-          <button onClick={() => {
+          <button onClick={async () => {
             const rows = filtered.map((p,i) => {
               const nuisible = p.nuisible||"Rongeurs";
               const tendance = getTendance(p);
@@ -2209,7 +2219,12 @@ function Cartographie({ seuilsGlobaux }) {
               return "<tr><td style='font-family:monospace;font-weight:700'>"+p.id+"</td><td>"+(p.zone||"")+"</td><td>"+nuisible+"</td>"+dateCols+"<td style='color:"+tcol+";font-weight:700'>"+tendance+"</td></tr>";
             }).join("");
             const _pcYear = (filterAnnee && filterAnnee!=="Toutes") ? String(filterAnnee) : null;
-            const pcRows = (reinterv||[]).filter(estReinvAuto).filter(r=>{ if(!_pcYear) return true; const p=(r.date||"").split("/"); return p.length===3 && p[2]===_pcYear; })
+            // On relit les contrôles post-conso FRAIS depuis la base au moment de
+            // l'export : la copie locale (reinterv) peut dater du chargement de la page
+            // et manquer un contrôle généré depuis -> d'où un décalage app / PDF.
+            let _reinvSrc = reinterv || [];
+            try { const _fresh = await sbGet("reinterventions"); if (Array.isArray(_fresh)) _reinvSrc = _fresh.map(normReinterv); } catch(_e) {}
+            const pcRows = (_reinvSrc).filter(estReinvAuto).filter(r=>{ if(!_pcYear) return true; const p=(r.date||"").split("/"); return p.length===3 && p[2]===_pcYear; })
               .slice().sort((a,b)=>{ const pd=d=>{const q=(d||"").split("/");return q.length===3?new Date(q[2]+"-"+q[1]+"-"+q[0]):new Date(0);}; return pd(b.date)-pd(a.date); })
               .map(r=>"<tr><td>"+r.date+"</td><td>"+(r.poste||"")+"</td><td>"+(r.technicien||"")+"</td><td>Non consommé</td></tr>").join("");
             exportHTML("Postes et Zones - "+CLIENT_CONFIG.nom+" - "+anneeLabel,
@@ -15459,24 +15474,27 @@ function AppPortail({ isAdmin, onLogout }) {
       const consommes = Object.keys(sais).filter(pid => sais[pid] && estConsoQuelconque(sais[pid].etat));
       if (consommes.length) consumedPassages[String(p.id)] = { p, consommes };
     });
-    const dejaAvecReinv = new Set();
-    (reinterventions||[]).forEach(r => { const pid = passageIdDe(r.id); if (pid) dejaAvecReinv.add(pid); });
     // Ensemble de TOUS les passages existants (pour le nettoyage) : un controle
     // post-conso peut etre rattache a un passage sans conso (conso trouvee sur un
     // suivi), donc on ne nettoie que si le passage parent n existe VRAIMENT plus.
     const allPassageIds = new Set(passagesGlobaux.map(p => String(p.id)));
-    // Generation : pour chaque passage consomme SANS aucun controle post-conso,
-    // on cree la sequence echue (jours ouvres). Un passage qui a deja des controles
-    // (saisis a la main / historiques) n est PAS touche -> ses vraies dates restent.
+    // Generation : pour chaque passage consomme, on cree la sequence echue
+    // (jours ouvres). On REBOUCHE LES TROUS index par index : on ne recree que les
+    // controles reinv_<pid>_<idx> ABSENTS (id deterministe). Ainsi un sbUpsert qui
+    // n avait pas abouti (ex : un index du milieu manquant) est rattrape au prochain
+    // chargement, et les controles deja presents (dont dates reconciliees a la main)
+    // ne sont jamais touches ni dupliques.
+    const existingIds = new Set((reinterventions||[]).map(r => String(r.id)));
     const nouv = [];
     Object.keys(consumedPassages).forEach(pid => {
-      if (dejaAvecReinv.has(pid)) return;
       const { p, consommes } = consumedPassages[pid];
       let cur = pdl(p.date); const steps=[2,2,2,7];
       steps.forEach((st,idx)=>{
         cur = ajouterJoursOuvres(cur, st);
         if (cur > today) return;                                  // jamais de date future
-        nouv.push({ id:"reinv_"+pid+"_"+idx, contrat:p.contrat||CLIENT_CONFIG.contrat, site:p.site, date:fmtl(cur),
+        const rid = "reinv_"+pid+"_"+idx;
+        if (existingIds.has(rid)) return;                         // deja present -> on ne recree pas
+        nouv.push({ id:rid, contrat:p.contrat||CLIENT_CONFIG.contrat, site:p.site, date:fmtl(cur),
                     technicien:p.technicien||"", poste:consommes.join(", "), anomalie:"Non consommé",
                     statut:"Terminé", observations:"Réintervention post-consommation (J+"+((idx<3)?"2":"7")+", jours ouvrés)",
                     actions:JSON.stringify([]), photos:JSON.stringify([]) });
