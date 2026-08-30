@@ -798,6 +798,17 @@ export function estReinvAuto(r) {
   var id = String(r.id||"");
   return id.indexOf("reinv") === 0 || (r.anomalie||"") === "Non consommé";
 }
+// Renvoie TOUJOURS un tableau, que la valeur soit deja un tableau, une chaine
+// JSON ("[]", "[\"...\"]") ou n importe quoi d autre. Evite le crash
+// "(x||[]).slice(...).map is not a function" (page blanche) quand actions/photos
+// sont stockes en texte JSON et pas reconvertis au chargement.
+export function toArraySafe(v) {
+  if (Array.isArray(v)) return v;
+  if (typeof v === "string") { try { var p = JSON.parse(v || "[]"); return Array.isArray(p) ? p : []; } catch (_e) { return []; } }
+  return [];
+}
+// Normalise une reintervention lue de la base : actions/photos en tableaux.
+export function normReinterv(r) { return { ...r, actions: toArraySafe(r.actions), photos: toArraySafe(r.photos) }; }
 // --- Jours feries francais (metropole) : fixes + mobiles (Paques/Ascension/Pentecote) ---
 var _feriesCache = {};
 function _paquesFR(y){
@@ -1011,7 +1022,7 @@ function exportHTML(title, htmlBody) {
 }
 
 function exportRapport(prestation, item) {
-  const photos = (item.photos||[]).filter(p=>p.url);
+  const photos = toArraySafe(item.photos).filter(p=>p.url);
   const photosHtml = photos.length > 0
     ? `<div style="margin-top:16px"><div style="font-weight:700;margin-bottom:8px;color:#1d4ed8">Photos</div><div style="display:flex;flex-wrap:wrap;gap:10px">${photos.map(p=>`<img src="${p.url}" style="max-width:200px;max-height:150px;border-radius:6px;border:1px solid #e2e8f0;object-fit:cover"/>`).join("")}</div></div>`
     : "";
@@ -1130,7 +1141,7 @@ function Dashboard({ onNav, reinterventions, onLogoClick, onParamsClick, passage
       }).catch(()=>{});
     }
     sbGet("reinterventions").then(data => {
-      if (data && data.length > 0) setLocalReinterv(data);
+      if (data && data.length > 0) setLocalReinterv(data.map(normReinterv));
     }).catch(()=>{});
     sbGet("postes").then(data => {
       if (data && data.length > 0) { var actifs = data.filter(function(p){ return p.statut !== "Désactivé"; }); setPostesTotal(actifs.length); setPostesListe(actifs); }
@@ -1474,7 +1485,7 @@ function Interventions({ reinterventions, setReinterventions, passagesGlobaux, s
   useEffect(() => {
     sbGet("passages").then(data => {
       if (data && data.length > 0) {
-        const parsed = data.map(r => ({ ...r, actions: typeof r.actions==="string"?JSON.parse(r.actions||"[]"):(r.actions||[]), photos: typeof r.photos==="string"?JSON.parse(r.photos||"[]"):(r.photos||[]) }));
+        const parsed = data.map(normReinterv);
         // Merge with passagesGlobaux (new unsaved ones)
         const ids = new Set(parsed.map(p=>String(p.id)));
         const extra = (passagesGlobaux||[]).filter(p=>!ids.has(String(p.id)));
@@ -1830,10 +1841,10 @@ function Interventions({ reinterventions, setReinterventions, passagesGlobaux, s
                       </div>
                       <div style={{ fontSize:12, color:"#7a90aa" }}>Postes : {r.poste}</div>
                     </div>
-                    {(r.actions||[]).slice(0,2).map(a => (
+                    {toArraySafe(r.actions).slice(0,2).map(a => (
                       <span key={a} style={{ fontSize:10, fontWeight:600, background:"#1d4ed822", color:"#3b82f6", border:"1px solid #3b82f644", borderRadius:4, padding:"2px 7px" }}>{a}</span>
                     ))}
-                    {(r.actions||[]).length > 2 && <span style={{ fontSize:10, color:"#7a90aa" }}>+{r.actions.length-2}</span>}
+                    {toArraySafe(r.actions).length > 2 && <span style={{ fontSize:10, color:"#7a90aa" }}>+{toArraySafe(r.actions).length-2}</span>}
                     <Badge label={r.statut||"En cours"} color={SREINV[r.statut]||"#7a90aa"}/>
                     <button onClick={e => { e.stopPropagation(); deleteReinv(r.id); setSel(null); }}
                       style={{ background:"#ef444422", color:"#ef4444", border:"1px solid #ef444444", borderRadius:7, padding:"3px 9px", fontSize:11, fontWeight:700, cursor:"pointer", fontFamily:"inherit" }}>✕</button>
@@ -1910,7 +1921,7 @@ function Cartographie({ seuilsGlobaux }) {
     }).catch(()=>{});
     // Charger les reinterventions (pour afficher les suivis post-conso par poste)
     sbGet("reinterventions").then(data => {
-      if (data && data.length > 0) setReinterv(data);
+      if (data && data.length > 0) setReinterv(data.map(normReinterv));
     }).catch(()=>{});
   }, []);
 
@@ -6169,7 +6180,7 @@ function Statistiques() {
     sbGet("passages").then(data => { if (data && data.length > 0) setPassages(data); }).catch(()=>{});
     sbGet("postes").then(data => { if (data && data.length > 0) setPostes(data); }).catch(()=>{});
     sbGet("plan_actions").then(data => { if (data && data.length > 0) setActions(data); }).catch(()=>{});
-    sbGet("reinterventions").then(data => { if (data && data.length > 0) setReinterventions(data); }).catch(()=>{});
+    sbGet("reinterventions").then(data => { if (data && data.length > 0) setReinterventions(data.map(normReinterv)); }).catch(()=>{});
   }, []);
 
   const pd = d => { if(!d) return new Date(0); const p=(d||"").split("/"); return p.length===3?new Date(p[2]+"-"+p[1]+"-"+p[0]):new Date(d); };
@@ -7372,7 +7383,7 @@ function SaisiePassage({ seuilsGlobaux, setSeuilsGlobaux, setReinterventions, se
 
   useEffect(() => {
     sbGet("reinterventions").then(data => {
-      if (data && data.length > 0) setReintervData(data);
+      if (data && data.length > 0) setReintervData(data.map(normReinterv));
     }).catch(()=>{});
     sbGet("passages").then(data => {
       if (data && data.length > 0) {
@@ -8737,7 +8748,7 @@ function Reinterventions({ reinterventions, setReinterventions }) {
                   <div style={{ fontSize: 13, fontWeight: 600, color: "#f1f5f9" }}>{item.technicien}</div>
                   <div style={{ fontSize: 11, color: "#7a90aa" }}>Postes : {item.poste}</div>
                 </div>
-                {(item.actions || []).slice(0, 2).map(a => (
+                {toArraySafe(item.actions).slice(0, 2).map(a => (
                   <span key={a} style={{ fontSize: 10, fontWeight: 600, background: "#1d4ed822", color: "#3b82f6", border: "1px solid #3b82f644", borderRadius: 4, padding: "2px 7px" }}>{a}</span>
                 ))}
                 <Badge label={item.statut} color={SCOLOR[item.statut] || "#7a90aa"} />
@@ -15521,7 +15532,7 @@ function AppPortail({ isAdmin, onLogout }) {
   // post-conso se declenche sur CHAQUE site (pas seulement le 1er au demarrage).
   useEffect(() => {
     sbGet("passages").then(data => { setPassagesGlobaux(Array.isArray(data) ? data : []); }).catch(()=>{ setPassagesGlobaux([]); });
-    sbGet("reinterventions").then(data => { setReinterventions(Array.isArray(data) ? data : []); }).catch(()=>{ setReinterventions([]); });
+    sbGet("reinterventions").then(data => { setReinterventions(Array.isArray(data) ? data.map(normReinterv) : []); }).catch(()=>{ setReinterventions([]); });
   }, [siteCourant]);
   const mainRef = React.useRef(null);
   const scrollAvantSite = React.useRef(0);
@@ -15675,7 +15686,7 @@ function AppPortail({ isAdmin, onLogout }) {
 
   useEffect(() => {
     sbGet("reinterventions").then(data => {
-      if (data && data.length > 0) setReinterventions(data.map(r => ({ ...r, actions: typeof r.actions==="string"?JSON.parse(r.actions||"[]"):(r.actions||[]), photos: typeof r.photos==="string"?JSON.parse(r.photos||"[]"):(r.photos||[]) })));
+      if (data && data.length > 0) setReinterventions(data.map(normReinterv));
     }).catch(() => {});
   }, []);
 
