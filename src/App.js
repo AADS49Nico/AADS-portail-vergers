@@ -181,9 +181,14 @@ let AADS_CONFIG = {
 // valeurs ci-dessous. Elles pointent vers Evelia UNIQUEMENT le temps de la
 // transition ; une fois les variables Vercel en place, ce repli est ignore.
 // ============================================================
-// CONFIG LES VERGERS EN DUR (portail dedie, base propre).
+const ENV = (typeof process !== "undefined" && process.env) ? process.env : {};
 const SUPABASE_URL = "https://mqtydhsctxnbaarwxrvy.supabase.co";
 const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1xdHlkaHNjdHhuYmFhcnd4cnZ5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQyNzU1MTYsImV4cCI6MjA5OTg1MTUxNn0.N4TnW8zmjmy9A_eESlSrSlTn-ycriUs_FQTZdHGpWcQ";
+
+// Reinterventions automatiques post-consommation (J+2 x3 puis J+7) : UNIQUEMENT
+// pour Les Vergers. On se base sur l URL de la base : ainsi la fonction ne
+// s active que sur le portail Vergers, meme si ce code est deploye ailleurs.
+const REINTERV_POST_CONSO = SUPABASE_URL.indexOf("mqtydhsctxnbaarwxrvy") !== -1;
 
 // ============================================================
 // MULTI-SITES
@@ -785,6 +790,41 @@ export function estConsoPartielle(v) {
 export function estConsoQuelconque(v) {
   return estConsoTotale(v) || estConsoPartielle(v);
 }
+// Reintervention AUTOMATIQUE de suivi post-consommation (J+2 x3 puis J+7,
+// "Non consommé") : id prefixe "reinv" ou anomalie "Non consommé". A traiter
+// a part : exclue des graphes, affichee en encadre blanc (suivi de routine).
+export function estReinvAuto(r) {
+  if (!r) return false;
+  var id = String(r.id||"");
+  return id.indexOf("reinv") === 0 || (r.anomalie||"") === "Non consommé";
+}
+// --- Jours feries francais (metropole) : fixes + mobiles (Paques/Ascension/Pentecote) ---
+var _feriesCache = {};
+function _paquesFR(y){
+  var a=y%19,b=Math.floor(y/100),c=y%100,d=Math.floor(b/4),e=b%4,
+      f=Math.floor((b+8)/25),g=Math.floor((b-f+1)/3),
+      h=(19*a+b-d-g+15)%30,i=Math.floor(c/4),k=c%4,
+      l=(32+2*e+2*i-h-k)%7,m=Math.floor((a+11*h+22*l)/451),
+      mois=Math.floor((h+l-7*m+114)/31),jour=((h+l-7*m+114)%31)+1;
+  return new Date(y, mois-1, jour);
+}
+function joursFeriesFR(y){
+  if(_feriesCache[y]) return _feriesCache[y];
+  var s=new Set();
+  [[1,1],[5,1],[5,8],[7,14],[8,15],[11,1],[11,11],[12,25]].forEach(function(md){ s.add(md[0]+"/"+md[1]); });
+  var p=_paquesFR(y);
+  [1,39,50].forEach(function(off){ var dd=new Date(p); dd.setDate(dd.getDate()+off); s.add((dd.getMonth()+1)+"/"+dd.getDate()); });
+  _feriesCache[y]=s; return s;
+}
+export function estFerieFR(date){
+  return joursFeriesFR(date.getFullYear()).has((date.getMonth()+1)+"/"+date.getDate());
+}
+// Ajoute n jours OUVRES (saute samedis, dimanches ET jours feries) a une date.
+export function ajouterJoursOuvres(date, n){
+  var r=new Date(date), a=0;
+  while(a<n){ r.setDate(r.getDate()+1); var w=r.getDay(); if(w!==0 && w!==6 && !estFerieFR(r)) a++; }
+  return r;
+}
 // Couleur d une consommation d appat selon les seuils configures (meme logique
 // que le plan) : vert si aucune conso, orange a partir du seuil orange, rouge a
 // partir du seuil rouge. Renvoie null si la valeur n est pas une consommation.
@@ -1131,7 +1171,9 @@ function Dashboard({ onNav, reinterventions, onLogoClick, onParamsClick, passage
 
   const passagesSorted = passagesSource.filter(p=>p.type!=="Insectes volants" && matchYear(p)).slice().sort((a,b)=>pd(b.date)-pd(a.date));
   const passagesDeivSorted = passagesSource.filter(p=>p.type==="Insectes volants" && matchYear(p)).slice().sort((a,b)=>pd(b.date)-pd(a.date));
-  const reinterventionsAnnee = (reinterventions||[]).filter(matchYear);
+  // Reinterventions "reelles" (sur anomalie) vs suivis automatiques post-conso.
+  const reinterventionsAnnee = (reinterventions||[]).filter(r=>matchYear(r) && !estReinvAuto(r));
+  const suivisPostConso      = (reinterventions||[]).filter(r=>matchYear(r) &&  estReinvAuto(r));
   const last = passagesSorted[0] || { anomalies:0, conso_totale:0, conso_partielle:0, date:"—", statut:"—" };
   const lastDeiv = passagesDeivSorted[0] || null;
 
@@ -1246,6 +1288,11 @@ function Dashboard({ onNav, reinterventions, onLogoClick, onParamsClick, passage
           <div style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 10, padding: "10px 18px" }}>
             <div style={{ fontSize: 18, fontWeight: 800, color: "#ef4444" }}>{reinterventionsAnnee.length}</div>
             <div style={{ fontSize: 10, color: "#7a90aa", marginTop: 2 }}>Réinterventions</div>
+          </div>
+          {/* Suivis post-consommation (auto) : forme distincte, fond blanc */}
+          <div style={{ background: "#ffffff", border: "1px solid #94a3b8", borderRadius: 10, padding: "10px 18px" }}>
+            <div style={{ fontSize: 18, fontWeight: 800, color: "#334155" }}>{suivisPostConso.length}</div>
+            <div style={{ fontSize: 10, color: "#64748b", marginTop: 2 }}>Suivis post-conso</div>
           </div>
           <div style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 10, padding: "10px 18px" }}>
             <div style={{ fontSize: 18, fontWeight: 800, color: "#a78bfa" }}>{last.date}</div>
@@ -1529,11 +1576,13 @@ function Interventions({ reinterventions, setReinterventions, passagesGlobaux, s
               const tot = p.total ?? Object.keys(saisiesP).length;
               return "<tr><td>"+p.date+"</td><td>"+tot+"</td><td style='color:#dc2626;font-weight:700'>"+ct+"</td><td style='color:#d97706;font-weight:700'>"+cp+"</td><td>"+(p.statut||"")+"</td></tr>";
             }).join("");
-            const reinvRows = allEvents.filter(e=>e._kind==="reinv").slice().sort((a,b) => {
-              const pd = d => { const p=(d||"").split("/"); return p.length===3?new Date(p[2]+"-"+p[1]+"-"+p[0]):new Date(d||0); };
-              return pd(b.date) - pd(a.date);
-            }).map(r =>
+            const _pdReinv = d => { const p=(d||"").split("/"); return p.length===3?new Date(p[2]+"-"+p[1]+"-"+p[0]):new Date(d||0); };
+            const _reinvAll = allEvents.filter(e=>e._kind==="reinv").slice().sort((a,b)=>_pdReinv(b.date)-_pdReinv(a.date));
+            const reinvRows = _reinvAll.filter(r=>!estReinvAuto(r)).map(r =>
               "<tr><td>" + r.date + "</td><td>" + (r.technicien||"") + "</td><td>" + (r.poste||"") + "</td><td>" + (r.anomalie||"") + "</td><td>" + (r.statut||"") + "</td></tr>"
+            ).join("");
+            const postConsoRows = _reinvAll.filter(estReinvAuto).map(r =>
+              "<tr><td>" + r.date + "</td><td>" + (r.technicien||"") + "</td><td>" + (r.poste||"") + "</td><td>Contrôle post conso — Non consommé</td></tr>"
             ).join("");
             exportHTML("Suivi des passages - " + CLIENT_CONFIG.nom + " - " + anneeLabel,
               "<h1>Suivi des passages — " + CLIENT_CONFIG.nom + " — " + anneeLabel + "</h1>" +
@@ -1547,7 +1596,8 @@ function Interventions({ reinterventions, setReinterventions, passagesGlobaux, s
               "</div>" +
               "<h2>Historique des passages</h2>" +
               "<table><thead><tr><th>Date</th><th>Total postes</th><th>Conso. totale</th><th>Conso. partielle</th><th>Statut</th></tr></thead><tbody>" + passagesRows + "</tbody></table>" +
-              (reinvRows ? "<h2>Réinterventions</h2><table><thead><tr><th>Date</th><th>Technicien</th><th>Poste</th><th>Anomalie</th><th>Statut</th></tr></thead><tbody>" + reinvRows + "</tbody></table>" : "")
+              (reinvRows ? "<h2>Réinterventions</h2><table><thead><tr><th>Date</th><th>Technicien</th><th>Poste</th><th>Anomalie</th><th>Statut</th></tr></thead><tbody>" + reinvRows + "</tbody></table>" : "") +
+              (postConsoRows ? "<h2>Contrôles post-consommation</h2><table><thead><tr><th>Date</th><th>Technicien</th><th>Poste(s)</th><th>Résultat</th></tr></thead><tbody>" + postConsoRows + "</tbody></table>" : "")
             );
           }}
             style={{ background:"#1d4ed822", color:"#3b82f6", border:"1px solid #3b82f644", borderRadius:8, padding:"9px 16px", fontSize:12, fontWeight:700, cursor:"pointer", fontFamily:"inherit" }}>
@@ -1726,14 +1776,26 @@ function Interventions({ reinterventions, setReinterventions, passagesGlobaux, s
                           <div style={{ background:"#ef444408", border:"1px solid #ef444422", borderRadius:10, padding:"10px 14px" }}>
                             <div style={{ fontSize:11, fontWeight:700, color:"#ef4444", marginBottom:8 }}>Réinterventions associées ({reinvLiees.length})</div>
                             <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
-                              {reinvLiees.map(r => (
-                                <div key={r.id} style={{ display:"flex", flexWrap:"wrap", gap:10, alignItems:"center", background:"#1a2540", borderRadius:8, padding:"8px 12px" }}>
-                                  <span style={{ fontSize:12, fontFamily:"monospace", color:"#fca5a5", fontWeight:700 }}>{r.date}</span>
-                                  <span style={{ fontSize:12, color:"#f1f5f9", flex:1 }}>{r.technicien}</span>
-                                  <span style={{ fontSize:11, color:"#7a90aa" }}>Postes : {r.poste}</span>
-                                  {r.statut && <Badge label={r.statut} color={SREINV[r.statut]||"#7a90aa"}/>}
-                                </div>
-                              ))}
+                              {reinvLiees.map(r => {
+                                const auto = estReinvAuto(r);
+                                // Suivi post-consommation : encadre BLANC + liseré, lecture "routine".
+                                return auto ? (
+                                  <div key={r.id} style={{ display:"flex", flexWrap:"wrap", gap:10, alignItems:"center", background:"#ffffff", border:"1px solid #94a3b8", borderRadius:8, padding:"8px 12px" }}>
+                                    <span style={{ fontSize:12, fontFamily:"monospace", color:"#334155", fontWeight:700 }}>{r.date}</span>
+                                    <span style={{ fontSize:9, fontWeight:800, letterSpacing:0.4, textTransform:"uppercase", color:"#475569", background:"#e2e8f0", border:"1px solid #cbd5e1", borderRadius:4, padding:"1px 6px" }}>Suivi post-conso</span>
+                                    <span style={{ fontSize:12, color:"#334155", flex:1 }}>{r.technicien}</span>
+                                    <span style={{ fontSize:11, color:"#64748b" }}>Postes : {r.poste}</span>
+                                    <span style={{ fontSize:10, fontWeight:700, color:"#16a34a" }}>Non consommé</span>
+                                  </div>
+                                ) : (
+                                  <div key={r.id} style={{ display:"flex", flexWrap:"wrap", gap:10, alignItems:"center", background:"#1a2540", borderRadius:8, padding:"8px 12px" }}>
+                                    <span style={{ fontSize:12, fontFamily:"monospace", color:"#fca5a5", fontWeight:700 }}>{r.date}</span>
+                                    <span style={{ fontSize:12, color:"#f1f5f9", flex:1 }}>{r.technicien}</span>
+                                    <span style={{ fontSize:11, color:"#7a90aa" }}>Postes : {r.poste}</span>
+                                    {r.statut && <Badge label={r.statut} color={SREINV[r.statut]||"#7a90aa"}/>}
+                                  </div>
+                                );
+                              })}
                             </div>
                           </div>
                         )}
@@ -1816,6 +1878,7 @@ function Interventions({ reinterventions, setReinterventions, passagesGlobaux, s
 function Cartographie({ seuilsGlobaux }) {
   const [postes, setPostes] = useState(POSTES_INIT.map(p => ({ ...p })));
   const [passagesSaisies, setPassagesSaisies] = useState([]);
+  const [reinterv, setReinterv] = useState([]);   // reinterventions (dont suivis post-conso)
   const [subtab, setSubtab] = useState("rongeurs");
   const [filterInsecte, setFilterInsecte] = useState("Tous");
   const [search, setSearch] = useState("");
@@ -1840,7 +1903,20 @@ function Cartographie({ seuilsGlobaux }) {
     sbGet("passages").then(data => {
       if (data && data.length > 0) setPassagesSaisies(data);
     }).catch(()=>{});
+    // Charger les reinterventions (pour afficher les suivis post-conso par poste)
+    sbGet("reinterventions").then(data => {
+      if (data && data.length > 0) setReinterv(data);
+    }).catch(()=>{});
   }, []);
+
+  // Suivis post-conso concernant un poste donne (poste present dans la liste "poste")
+  function suivisPostConsoDuPoste(posteId) {
+    return (reinterv||[]).filter(r => {
+      if (!estReinvAuto(r)) return false;
+      var liste = String(r.poste||"").split(",").map(s=>s.trim());
+      return liste.indexOf(String(posteId)) !== -1;
+    }).sort((a,b)=>{ const pd=d=>{const p=(d||"").split("/");return p.length===3?new Date(p[2]+"-"+p[1]+"-"+p[0]):new Date(0);}; return pd(b.date)-pd(a.date); });
+  }
 
   // Construire les dates dynamiquement depuis les passages saisis
   const DATES_ALL = passagesSaisies.length > 0
@@ -2074,10 +2150,15 @@ function Cartographie({ seuilsGlobaux }) {
               }).join("");
               return "<tr><td style='font-family:monospace;font-weight:700'>"+p.id+"</td><td>"+(p.zone||"")+"</td><td>"+nuisible+"</td>"+dateCols+"<td style='color:"+tcol+";font-weight:700'>"+tendance+"</td></tr>";
             }).join("");
+            const _pcYear = (filterAnnee && filterAnnee!=="Toutes") ? String(filterAnnee) : null;
+            const pcRows = (reinterv||[]).filter(estReinvAuto).filter(r=>{ if(!_pcYear) return true; const p=(r.date||"").split("/"); return p.length===3 && p[2]===_pcYear; })
+              .slice().sort((a,b)=>{ const pd=d=>{const q=(d||"").split("/");return q.length===3?new Date(q[2]+"-"+q[1]+"-"+q[0]):new Date(0);}; return pd(b.date)-pd(a.date); })
+              .map(r=>"<tr><td>"+r.date+"</td><td>"+(r.poste||"")+"</td><td>"+(r.technicien||"")+"</td><td>Non consommé</td></tr>").join("");
             exportHTML("Postes et Zones - "+CLIENT_CONFIG.nom+" - "+anneeLabel,
               "<h1>Postes et Zones - "+CLIENT_CONFIG.nom+" - "+anneeLabel+"</h1>" +
               "<p style='color:#7a90aa;margin-bottom:16px'>" + DATES.length + " passage(s) - Edite le " + new Date().toLocaleDateString("fr-FR") + "</p>" +
-              "<table><thead><tr><th>N°</th><th>Zone</th><th>Nuisible</th>"+DATES.map(d=>"<th>"+d.slice(0,5)+"</th>").join("")+"<th>Tendance</th></tr></thead><tbody>"+rows+"</tbody></table>"
+              "<table><thead><tr><th>N°</th><th>Zone</th><th>Nuisible</th>"+DATES.map(d=>"<th>"+d.slice(0,5)+"</th>").join("")+"<th>Tendance</th></tr></thead><tbody>"+rows+"</tbody></table>" +
+              (pcRows ? "<h2>Contrôles post-consommation</h2><table><thead><tr><th>Date</th><th>Poste(s)</th><th>Technicien</th><th>Résultat</th></tr></thead><tbody>"+pcRows+"</tbody></table>" : "")
             );
           }}
             style={{ background:"#1d4ed822", color:"#3b82f6", border:"1px solid #3b82f644", borderRadius:9, padding:"9px 16px", fontSize:12, fontWeight:700, cursor:"pointer", fontFamily:"inherit" }}>
@@ -2297,6 +2378,24 @@ function Cartographie({ seuilsGlobaux }) {
                 </div>
               );
             })}
+            {/* Suivis post-consommation concernant ce poste (encadre blanc) */}
+            {(() => {
+              const sp = suivisPostConsoDuPoste(displaySel.id);
+              if (!sp.length) return null;
+              return (
+                <div style={{ marginTop: 10 }}>
+                  <div style={{ fontSize: 11, color: "#7a90aa", fontWeight: 700, textTransform: "uppercase", marginBottom: 8 }}>Contrôles post-consommation ({sp.length})</div>
+                  {sp.map(r => (
+                    <div key={r.id} style={{ background:"#ffffff", border:"1px solid #94a3b8", borderRadius:8, padding:"7px 12px", marginBottom:6, display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }} onClick={e=>e.stopPropagation()}>
+                      <span style={{ fontSize:11, fontFamily:"monospace", color:"#334155", fontWeight:700 }}>{r.date}</span>
+                      <span style={{ fontSize:9, fontWeight:800, letterSpacing:0.4, textTransform:"uppercase", color:"#475569", background:"#e2e8f0", border:"1px solid #cbd5e1", borderRadius:4, padding:"1px 6px" }}>Post-conso</span>
+                      <span style={{ fontSize:10, fontWeight:700, color:"#16a34a" }}>Non consommé</span>
+                      {r.technicien && <span style={{ fontSize:10, color:"#64748b" }}>{r.technicien}</span>}
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
           </Card>
         )}
       </div>
@@ -3435,7 +3534,9 @@ function DeivEvolutionChart({ passages, anneeRef }) {
   );
 }
 
-function ReinterPassagesChart({ passages, reinterventions }) {
+function ReinterPassagesChart({ passages, reinterventions: _reinvAll }) {
+  // On EXCLUT les reinterventions automatiques de suivi post-consommation.
+  const reinterventions = (_reinvAll||[]).filter(r=>!estReinvAuto(r));
   const pd=d=>{const p=(d||"").split("/");return p.length===3?new Date(p[2]+"-"+p[1]+"-"+p[0]):new Date(0);};
   function anneeDe(x){ const p=((x||{}).date||"").split("/"); if(p.length!==3) return null; const y=parseInt(p[2]); return isNaN(y)?null:y; }
   const tousEvts=(passages||[]).concat(reinterventions||[]);
@@ -3654,7 +3755,8 @@ function Top10PostesChart({ passages, postes }) {
   );
 }
 
-function PassagesParAnneeChart({ passages, reinterventions }) {
+function PassagesParAnneeChart({ passages, reinterventions: _reinvAll }) {
+  const reinterventions = (_reinvAll||[]).filter(r=>!estReinvAuto(r));
   const [collapsed, setCollapsed] = usePersistedCollapsed("PassagesParAnnee", false);
   const [fullscreen, setFullscreen] = useState(false);
 
@@ -7243,6 +7345,7 @@ function SaisiePassage({ seuilsGlobaux, setSeuilsGlobaux, setReinterventions, se
   const inpS = { background:"#1a2540", border:"1px solid #3d5270", borderRadius:6, padding:"4px 8px", color:"#f1f5f9", fontSize:11, fontFamily:"inherit" };
 
   const [passagesData, setPassagesData] = useState([]);
+  const [reintervData, setReintervData] = useState([]);   // pour afficher les controles post-conso dans la liste
   const [view, setView]       = useState("liste");
   const [form, setForm]       = useState({ date:"", technicien:"", type:"Rongeurs", notes:"" });
   const [saisies, setSaisies] = useState({});
@@ -7265,6 +7368,9 @@ function SaisiePassage({ seuilsGlobaux, setSeuilsGlobaux, setReinterventions, se
   const setSeuils = setSeuilsGlobaux;
 
   useEffect(() => {
+    sbGet("reinterventions").then(data => {
+      if (data && data.length > 0) setReintervData(data);
+    }).catch(()=>{});
     sbGet("passages").then(data => {
       if (data && data.length > 0) {
         const sorted = data.sort((a,b) => {
@@ -7340,6 +7446,10 @@ function SaisiePassage({ seuilsGlobaux, setSeuilsGlobaux, setReinterventions, se
           alert("Passage sauvegardé localement. Il sera synchronisé dès que vous serez en ligne.");
         }).catch(()=>{});
       }
+
+      // Les reinterventions post-consommation ne sont PAS creees ici (leurs dates
+      // sont futures) : elles sont generees au fil du temps, uniquement quand
+      // leur date est echue (<= aujourd hui), par l effet dedie au niveau App.
     }
     setView("liste");
   }
@@ -7492,31 +7602,50 @@ function SaisiePassage({ seuilsGlobaux, setSeuilsGlobaux, setReinterventions, se
       {/* ONGLET LISTE */}
       {activeTab==="liste_tab" && (
         <div>
-          {passagesData.length===0 && <Card><div style={{textAlign:"center",color:"#5a7090",padding:20}}>Aucun passage enregistré.</div></Card>}
-          {passagesData.map(p=>(
-            <Card key={p.id} style={{marginBottom:8}}>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
-                <div>
-                  <div style={{fontSize:13,fontWeight:700,color:"#f1f5f9"}}>{p.date}</div>
-                  <div style={{fontSize:11,color:"#7a90aa"}}>{p.technicien} — {p.type}</div>
+          {(() => {
+            const pdl=d=>{const q=(d||"").split("/");return q.length===3?new Date(q[2]+"-"+q[1]+"-"+q[0]):new Date(0);};
+            const items=[
+              ...passagesData.map(p=>({_k:"p", ...p})),
+              ...(reintervData||[]).filter(estReinvAuto).map(r=>({_k:"pc", ...r})),
+            ].sort((a,b)=>pdl(b.date)-pdl(a.date));
+            if (items.length===0) return <Card><div style={{textAlign:"center",color:"#5a7090",padding:20}}>Aucun passage enregistré.</div></Card>;
+            return items.map(p => p._k==="pc" ? (
+              // Controle post-consommation : encadre BLANC, note "Contrôle post conso"
+              <Card key={p.id} style={{marginBottom:8, background:"#ffffff", border:"1px solid #94a3b8"}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
+                  <div>
+                    <div style={{fontSize:13,fontWeight:700,color:"#334155"}}>{p.date}</div>
+                    <div style={{fontSize:11,color:"#64748b"}}>{p.technicien} — <span style={{fontWeight:700,color:"#475569"}}>Contrôle post conso</span></div>
+                    {p.poste && <div style={{fontSize:10,color:"#64748b",marginTop:2}}>Postes : {p.poste} · Non consommé</div>}
+                  </div>
+                  <span style={{fontSize:9,fontWeight:800,letterSpacing:0.4,textTransform:"uppercase",color:"#475569",background:"#e2e8f0",border:"1px solid #cbd5e1",borderRadius:4,padding:"2px 7px"}}>Post-conso</span>
                 </div>
-                <div style={{display:"flex",gap:6}}>
-                  <button onClick={()=>{setEditingPassage(p.id);const saisiesData=typeof p.saisies==="string"?JSON.parse(p.saisies||"{}"):p.saisies||{};setSaisies(saisiesData);const d=p.date&&p.date.includes("/")?p.date.split("/").reverse().join("-"):p.date;setForm({date:d,technicien:p.technicien,type:p.type,notes:p.notes||""});setActiveTab("saisie_tab");setView("saisie");}}
-                    style={{background:"#1d4ed822",color:"#3b82f6",border:"1px solid #3b82f644",borderRadius:6,padding:"4px 10px",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
-                    Modifier
-                  </button>
-                  {prevPassagesData && <button onClick={()=>{setPassagesData(prevPassagesData);setPrevPassagesData(null);}}
-                    style={{background:"#f59e0b22",color:"#f59e0b",border:"1px solid #f59e0b44",borderRadius:6,padding:"4px 10px",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
-                    ↩
-                  </button>}
-                  <button onClick={()=>deletePassage(p.id)}
-                    style={{background:"#ef444422",color:"#ef4444",border:"1px solid #ef444433",borderRadius:6,padding:"4px 8px",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
-                    Supprimer
-                  </button>
+              </Card>
+            ) : (
+              <Card key={p.id} style={{marginBottom:8}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
+                  <div>
+                    <div style={{fontSize:13,fontWeight:700,color:"#f1f5f9"}}>{p.date}</div>
+                    <div style={{fontSize:11,color:"#7a90aa"}}>{p.technicien} — {p.type}</div>
+                  </div>
+                  <div style={{display:"flex",gap:6}}>
+                    <button onClick={()=>{setEditingPassage(p.id);const saisiesData=typeof p.saisies==="string"?JSON.parse(p.saisies||"{}"):p.saisies||{};setSaisies(saisiesData);const d=p.date&&p.date.includes("/")?p.date.split("/").reverse().join("-"):p.date;setForm({date:d,technicien:p.technicien,type:p.type,notes:p.notes||""});setActiveTab("saisie_tab");setView("saisie");}}
+                      style={{background:"#1d4ed822",color:"#3b82f6",border:"1px solid #3b82f644",borderRadius:6,padding:"4px 10px",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+                      Modifier
+                    </button>
+                    {prevPassagesData && <button onClick={()=>{setPassagesData(prevPassagesData);setPrevPassagesData(null);}}
+                      style={{background:"#f59e0b22",color:"#f59e0b",border:"1px solid #f59e0b44",borderRadius:6,padding:"4px 10px",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+                      ↩
+                    </button>}
+                    <button onClick={()=>deletePassage(p.id)}
+                      style={{background:"#ef444422",color:"#ef4444",border:"1px solid #ef444433",borderRadius:6,padding:"4px 8px",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+                      Supprimer
+                    </button>
+                  </div>
                 </div>
-              </div>
-            </Card>
-          ))}
+              </Card>
+            ));
+          })()}
         </div>
       )}
       {/* ONGLET PASSAGE DEIV */}
@@ -8011,6 +8140,14 @@ function SaisiePassage({ seuilsGlobaux, setSeuilsGlobaux, setReinterventions, se
               </button>
               <button onClick={()=>setShowReinvForm(v=>!v)} style={{background:"#ef4444",color:"#fff",border:"none",borderRadius:9,padding:"10px 18px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
                 + Reintervention
+              </button>
+              <button onClick={()=>{
+                const t=new Date();
+                const iso=t.getFullYear()+"-"+("0"+(t.getMonth()+1)).slice(-2)+"-"+("0"+t.getDate()).slice(-2);
+                setReinvForm({date:iso, technicien:form.technicien||"", poste:"", anomalie:"Non consommé", statut:"Terminé", observations:"Contrôle post-consommation", actions:[]});
+                setShowReinvForm(true);
+              }} style={{background:"#ffffff",color:"#334155",border:"1px solid #94a3b8",borderRadius:9,padding:"10px 18px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+                + Contrôle post conso
               </button>
               {prevPassagesData && (
                 <button onClick={()=>{setPassagesData(prevPassagesData);setPrevPassagesData(null);}}
@@ -15226,7 +15363,60 @@ function AppPortail({ isAdmin, onLogout }) {
     sbGet("passages").then(data => {
       if (data && data.length > 0) setPassagesGlobaux(data);
     }).catch(()=>{});
+    sbGet("reinterventions").then(data => {
+      if (data && data.length > 0) setReinterventions(data);
+    }).catch(()=>{});
   }, []);
+
+  // Génération automatique des réinterventions post-consommation (Vergers only).
+  // Regle : J+2, J+2, J+2 puis J+7 en JOURS OUVRES apres le dernier controle,
+  // pour les postes consommes. On ne cree QUE les dates ECHUES (<= aujourd hui) :
+  // ainsi jamais de reintervention datee dans le futur ; les suivantes se creent
+  // automatiquement au fil des chargements, quand leur date arrive. Idempotent
+  // (ids deterministes reinv_<passageId>_<idx>).
+  useEffect(() => {
+    if (!REINTERV_POST_CONSO) return;
+    if (!passagesGlobaux || passagesGlobaux.length === 0) return;
+    const today = new Date(); today.setHours(0,0,0,0);
+    const existing = new Set((reinterventions||[]).map(r=>String(r.id)));
+    const pdl  = s => { const p=(s||"").split("/"); return p.length===3 ? new Date(+p[2], +p[1]-1, +p[0]) : new Date(s); };
+    const fmtl = d => ("0"+d.getDate()).slice(-2)+"/"+("0"+(d.getMonth()+1)).slice(-2)+"/"+d.getFullYear();
+    const nouv = [];
+    const validIds = new Set();   // tous les ids AUTO qui DOIVENT exister (echus)
+    passagesGlobaux.forEach(p => {
+      if (p.type === "Insectes volants") return;                 // pas les DEIV
+      let sais = p.saisies; if (typeof sais === "string") { try { sais = JSON.parse(sais||"{}"); } catch(e){ sais = {}; } }
+      if (!sais) return;
+      const consommes = Object.keys(sais).filter(pid => sais[pid] && estConsoQuelconque(sais[pid].etat));
+      if (!consommes.length) return;
+      let cur = pdl(p.date); const steps=[2,2,2,7];
+      steps.forEach((st,idx)=>{
+        cur = ajouterJoursOuvres(cur, st);                        // saute week-ends ET jours feries
+        if (cur > today) return;                                  // pas de date future
+        const rid = "reinv_"+p.id+"_"+idx;
+        validIds.add(rid);
+        if (existing.has(rid)) return;
+        existing.add(rid);
+        nouv.push({ id:rid, contrat:p.contrat||CLIENT_CONFIG.contrat, site:p.site, date:fmtl(cur),
+                    technicien:p.technicien||"", poste:consommes.join(", "), anomalie:"Non consommé",
+                    statut:"Terminé", observations:"Réintervention post-consommation (J+"+((idx<3)?"2":"7")+", jours ouvrés)",
+                    actions:JSON.stringify([]), photos:JSON.stringify([]) });
+      });
+    });
+    // Nettoyage automatique : supprime les reinterventions AUTO orphelines
+    // (id "reinv_..." qui ne correspond plus a un passage/poste consomme, ou d un
+    // ancien back-fill). Ne touche PAS aux controles manuels (id numerique).
+    const orphelins = (reinterventions||[]).filter(r => String(r.id||"").indexOf("reinv_")===0 && !validIds.has(String(r.id)));
+    if (nouv.length) nouv.forEach(r => sbUpsert("reinterventions", r));
+    if (orphelins.length) orphelins.forEach(r => sbDelete("reinterventions", r.id));
+    if (nouv.length || orphelins.length) {
+      const delSet = new Set(orphelins.map(r=>String(r.id)));
+      setReinterventions(prev => [
+        ...nouv.map(r=>({...r, actions:[], photos:[]})),
+        ...(prev||[]).filter(r=>!delSet.has(String(r.id)))
+      ]);
+    }
+  }, [passagesGlobaux, reinterventions]);
 
   const [navVisible, setNavVisible] = useState(() => {
     const init = {};
