@@ -8852,6 +8852,9 @@ function Habilitations() {
   const [form, setForm]               = useState({ nom:"", role:"Technicien", actif:true, certiphyto:false, certibiocide:false, hab_elec:false, caces:false, pack_sec:false, telephone:"", email:"", equipe:"3d" });
   const [uploading, setUploading]     = useState(null);
   const [newDocType, setNewDocType]   = useState("Certiphyto");
+  const [formations, setFormations]   = useState({});   // techId -> [{id,intitule,organisme,date,date_expiration,url,nom}]
+  const [formDraft, setFormDraft]     = useState({ intitule:"", organisme:"", date:"", date_expiration:"" });
+  const [uploadingForm, setUploadingForm] = useState(null);
   const [hiddenIds, setHiddenIds]     = useState(()=>{ try { const s = localStorage.getItem("aads_hab_hidden"); const a = s?JSON.parse(s):[]; return Array.isArray(a)?a:[]; } catch(e) { return []; } });
   const [draggingId, setDraggingId]   = useState(null);
   const [showHidden, setShowHidden]   = useState(false);
@@ -8916,7 +8919,48 @@ function Habilitations() {
         setDocs(byTech);
       }
     }).catch(()=>{});
+    sbGet("formations").then(data => {
+      if (data && data.length > 0) {
+        const byTech = {};
+        data.forEach(f => { if (!byTech[f.habilitation_id]) byTech[f.habilitation_id] = []; byTech[f.habilitation_id].push(f); });
+        setFormations(byTech);
+      }
+    }).catch(()=>{});
   }, []);
+
+  // --- Formations par technicien (table "formations" + document dans le bucket) ---
+  function addFormation(techId) {
+    if (!formDraft.intitule) return;
+    const id = String(Date.now());
+    const row = { id, contrat:CLIENT_CONFIG.contrat, habilitation_id:techId, intitule:formDraft.intitule, organisme:formDraft.organisme||"", date:formDraft.date||"", date_expiration:formDraft.date_expiration||"", url:"", nom:"" };
+    setFormations(prev => ({ ...prev, [techId]: [...(prev[techId]||[]), row] }));
+    sbUpsert("formations", row);
+    setFormDraft({ intitule:"", organisme:"", date:"", date_expiration:"" });
+  }
+  async function uploadFormationDoc(techId, formId, file) {
+    if (!file) return;
+    setUploadingForm(formId);
+    const path = CLIENT_CONFIG.contrat + "/formations/" + formId + "_" + Date.now() + "_" + sanitizeFileName(file.name);
+    try {
+      const res = await fetch(SUPABASE_URL + "/storage/v1/object/documents/" + path, {
+        method:"POST", headers:{ apikey:SUPABASE_KEY, Authorization:"Bearer "+SUPABASE_KEY, "Content-Type":file.type }, body:file
+      });
+      if (res.ok) {
+        const url = SUPABASE_URL + "/storage/v1/object/public/documents/" + path;
+        var updated = null;
+        setFormations(prev => {
+          const list = (prev[techId]||[]).map(f => { if (f.id===formId) { updated = {...f, url, nom:file.name}; return updated; } return f; });
+          return { ...prev, [techId]: list };
+        });
+        if (updated) sbUpsert("formations", updated);
+      }
+    } catch(e) { console.error(e); }
+    setUploadingForm(null);
+  }
+  function deleteFormation(techId, formId) {
+    setFormations(prev => ({ ...prev, [techId]: (prev[techId]||[]).filter(f => f.id!==formId) }));
+    sbDelete("formations", formId);
+  }
 
   function startAdd() { setForm({ nom:"", role:"Technicien", actif:true, certiphyto:false, certibiocide:false, hab_elec:false, caces:false, pack_sec:false, telephone:"", email:"", equipe:activeEquipe }); setEditing(null); setShowForm(true); }
   function startEdit(t) { setForm({...t, equipe:t.equipe||"3d"}); setEditing(t.id); setShowForm(true); }
@@ -9184,6 +9228,50 @@ function Habilitations() {
                 ))}
               </Card>
             )}
+
+            {/* Formations */}
+            <Card style={{ marginTop:12 }}>
+              <div style={{ fontSize:11, fontWeight:700, color:"#7a90aa", textTransform:"uppercase", marginBottom:10 }}>Formations ({(formations[sel.id]||[]).length})</div>
+              {(formations[sel.id]||[]).map(f=>(
+                <div key={f.id} style={{ border:"1px solid #243352", borderRadius:8, padding:"8px 10px", marginBottom:8 }}>
+                  <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                    <span style={{ fontSize:12, fontWeight:700, color:"#cbd5e1", flex:1 }}>{f.intitule}</span>
+                    <button onClick={()=>deleteFormation(sel.id, f.id)}
+                      style={{ background:"#ef444422", color:"#ef4444", border:"1px solid #ef444433", borderRadius:4, padding:"1px 6px", fontSize:10, fontWeight:700, cursor:"pointer", fontFamily:"inherit" }}>X</button>
+                  </div>
+                  {(f.organisme||f.date||f.date_expiration) && (
+                    <div style={{ fontSize:10, color:"#7a90aa", marginTop:2 }}>
+                      {[f.organisme, f.date&&("le "+f.date), f.date_expiration&&("expire le "+f.date_expiration)].filter(Boolean).join(" · ")}
+                    </div>
+                  )}
+                  <div style={{ marginTop:6, display:"flex", gap:10, alignItems:"center", flexWrap:"wrap" }}>
+                    {f.url
+                      ? <a href={f.url} target="_blank" rel="noreferrer" style={{ fontSize:11, color:"#22c55e", fontWeight:700, textDecoration:"none" }}>📎 {f.nom||"Voir le document"}</a>
+                      : <label style={{ background:"#1d4ed822", color:"#3b82f6", border:"1px solid #3b82f644", borderRadius:6, padding:"3px 10px", fontSize:10, fontWeight:700, cursor:"pointer" }}>
+                          {uploadingForm===f.id?"Envoi...":"+ Joindre le document"}
+                          <input type="file" accept=".pdf,.jpg,.jpeg,.png" style={{ display:"none" }} onChange={e=>uploadFormationDoc(sel.id, f.id, e.target.files[0])}/>
+                        </label>}
+                    {f.url && (
+                      <label style={{ fontSize:10, color:"#7a90aa", cursor:"pointer", textDecoration:"underline" }}>
+                        {uploadingForm===f.id?"Envoi...":"Remplacer"}
+                        <input type="file" accept=".pdf,.jpg,.jpeg,.png" style={{ display:"none" }} onChange={e=>uploadFormationDoc(sel.id, f.id, e.target.files[0])}/>
+                      </label>
+                    )}
+                  </div>
+                </div>
+              ))}
+              {/* Ajout d une formation */}
+              <div style={{ borderTop:"1px solid #3d5270", paddingTop:10, marginTop:4 }}>
+                <input value={formDraft.intitule} onChange={e=>setFormDraft(p=>({...p,intitule:e.target.value}))} placeholder="Intitulé de la formation" style={{...inpStyle, marginBottom:6}}/>
+                <input value={formDraft.organisme} onChange={e=>setFormDraft(p=>({...p,organisme:e.target.value}))} placeholder="Organisme (optionnel)" style={{...inpStyle, marginBottom:6}}/>
+                <div style={{ display:"flex", gap:6, marginBottom:8 }}>
+                  <input value={formDraft.date} onChange={e=>setFormDraft(p=>({...p,date:e.target.value}))} placeholder="Date (jj/mm/aaaa)" style={{...inpStyle}}/>
+                  <input value={formDraft.date_expiration} onChange={e=>setFormDraft(p=>({...p,date_expiration:e.target.value}))} placeholder="Expiration (optionnel)" style={{...inpStyle}}/>
+                </div>
+                <button onClick={()=>addFormation(sel.id)} disabled={!formDraft.intitule}
+                  style={{ background:"#1d4ed8", color:"#fff", border:"none", borderRadius:7, padding:"7px 14px", fontSize:12, fontWeight:700, cursor:formDraft.intitule?"pointer":"not-allowed", opacity:formDraft.intitule?1:0.5, fontFamily:"inherit" }}>+ Ajouter la formation</button>
+              </div>
+            </Card>
           </div>
         )}
       </div>
