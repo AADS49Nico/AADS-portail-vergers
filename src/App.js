@@ -820,6 +820,10 @@ export function passageIdDe(id) {
   const li = rest.lastIndexOf("_");
   return li > 0 ? rest.slice(0, li) : rest;
 }
+// Molecules NON toxiques (placebo). "Kripto" est un appat placebo : il doit etre
+// compte comme placebo (et jamais comme molecule biocide/toxique) dans les analyses.
+var PLACEBO_MOLECULES = ["placebo","kripto","non toxique"];
+export function estPlaceboMol(m){ return PLACEBO_MOLECULES.indexOf(String(m||"").trim().toLowerCase()) !== -1; }
 // --- Jours feries francais (metropole) : fixes + mobiles (Paques/Ascension/Pentecote) ---
 var _feriesCache = {};
 function _paquesFR(y){
@@ -889,9 +893,9 @@ function moleculesToxiquesTexte(passages, postesRongeurs) {
   (passages||[]).forEach(function(pa){
     if (pa.type === "Insectes volants") return;
     var s = typeof pa.saisies === "string" ? (function(){ try { return JSON.parse(pa.saisies||"{}"); } catch(e){ return {}; } })() : (pa.saisies||{});
-    Object.keys(s).forEach(function(id){ if(!ids[id]) return; var m = s[id] && s[id].molecule; if(m && m!=="Placebo" && m!=="Non toxique") set[m] = 1; });
+    Object.keys(s).forEach(function(id){ if(!ids[id]) return; var m = s[id] && s[id].molecule; if(m && !estPlaceboMol(m)) set[m] = 1; });
   });
-  (postesRongeurs||[]).forEach(function(p){ if(p.molecule_actuelle && p.molecule_actuelle!=="Placebo") set[p.molecule_actuelle] = 1; });
+  (postesRongeurs||[]).forEach(function(p){ if(p.molecule_actuelle && !estPlaceboMol(p.molecule_actuelle)) set[p.molecule_actuelle] = 1; });
   var arr = Object.keys(set);
   return arr.length ? arr.join(", ") : "";
 }
@@ -5953,7 +5957,7 @@ function ToxiquePlaceboChart({ passages, postes }) {
         const s=saisies[poste.id];
         if (!s || !s.molecule) return;
         byMois[key].total++;
-        if (s.molecule==="Placebo") byMois[key].placebo++;
+        if (estPlaceboMol(s.molecule)) byMois[key].placebo++;
         else byMois[key].toxique++;
       });
     });
@@ -6122,12 +6126,12 @@ function MoleculesChart({ passages, postes }) {
         const s = saisies[poste.id];
         if (!s || !s.molecule) return;
         const mol = s.molecule;
-        if (mol === "Placebo") return; // le placebo n est pas une molecule biocide
+        if (estPlaceboMol(mol)) return; // placebo (dont Kripto) n est pas une molecule biocide
         counts[mol] = (counts[mol]||0)+1;
       });
     });
     // Aussi depuis molecule_actuelle des postes (état actuel)
-    postesRongeurs.forEach(p=>{ if (p.molecule_actuelle && p.molecule_actuelle !== "Placebo") counts[p.molecule_actuelle] = (counts[p.molecule_actuelle]||0); });
+    postesRongeurs.forEach(p=>{ if (p.molecule_actuelle && !estPlaceboMol(p.molecule_actuelle)) counts[p.molecule_actuelle] = (counts[p.molecule_actuelle]||0); });
     return Object.entries(counts).sort((a,b)=>b[1]-a[1]);
   }
 
@@ -7621,7 +7625,7 @@ function SaisiePassage({ seuilsGlobaux, setSeuilsGlobaux, setReinterventions, se
       if ((p.nuisible||"Rongeurs")!=="Rongeurs") return;
       if (!enriched[p.id]) enriched[p.id] = {};
       // Molecule pre-remplie depuis la derniere saisie connue, Placebo par defaut
-      if (!enriched[p.id].molecule) enriched[p.id].molecule = p.molecule_actuelle || "Placebo";
+      if (!enriched[p.id].molecule) enriched[p.id].molecule = p.molecule_actuelle || "Kripto";
       // Etat pre-rempli sur Aucune : le poste compte comme controle sans clic
       if (enriched[p.id].etat === undefined) enriched[p.id].etat = "";
     });
@@ -8127,12 +8131,13 @@ function SaisiePassage({ seuilsGlobaux, setSeuilsGlobaux, setReinterventions, se
                       <div>
                         <div style={{ marginBottom:12 }}>
                           <label style={{ fontSize:10, color:"#7a90aa", fontWeight:700, display:"block", marginBottom:4 }}>ANCIENNE MOLECULE (derniere connue)</label>
-                          <div style={{ background:"#1a2540", border:"1px solid #3d5270", borderRadius:8, padding:"9px 12px", color:"#94a3b8", fontSize:13 }}>{poste.molecule_actuelle || "Placebo"}</div>
+                          <div style={{ background:"#1a2540", border:"1px solid #3d5270", borderRadius:8, padding:"9px 12px", color:"#94a3b8", fontSize:13 }}>{poste.molecule_actuelle || "Kripto"}</div>
                         </div>
                         <div style={{ marginBottom:14 }}>
                           <label style={{ fontSize:10, color:"#7a90aa", fontWeight:700, display:"block", marginBottom:4 }}>NOUVELLE MOLECULE</label>
-                          <select value={s.molecule || (poste.molecule_actuelle || "Placebo")} onChange={function(e){ setSaisieField(poste.id, "molecule", e.target.value); }}
+                          <select value={s.molecule || (poste.molecule_actuelle || "Kripto")} onChange={function(e){ setSaisieField(poste.id, "molecule", e.target.value); }}
                             style={{ width:"100%", background:"#1a2540", border:"1px solid #3d5270", borderRadius:8, padding:"10px 12px", color:"#f1f5f9", fontSize:14, fontFamily:"inherit", boxSizing:"border-box" }}>
+                            <option value="Kripto">Kripto</option>
                             <option value="Placebo">Placebo</option>
                             <option value="Toxique">Toxique</option>
                             {produitsBiocides.map(function(pb){ return <option key={pb.id} value={pb.nom}>{pb.nom}</option>; })}
@@ -8344,21 +8349,21 @@ function SaisiePassage({ seuilsGlobaux, setSeuilsGlobaux, setReinterventions, se
                       const postesRI = postes.filter(p=>(p.nuisible||"Rongeurs")==="Rongeurs" && p.type==="RI");
                       setSaisies(prev=>{
                         const next = {...prev};
-                        postesRI.forEach(p=>{ next[p.id] = {...(next[p.id]||{}), molecule:"Placebo"}; });
+                        postesRI.forEach(p=>{ next[p.id] = {...(next[p.id]||{}), molecule:"Kripto"}; });
                         return next;
                       });
                     }} style={{background:"#3b82f622",color:"#3b82f6",border:"1px solid #3b82f644",borderRadius:7,padding:"5px 12px",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
-                      🔵 Tout Placebo (RI)
+                      🔵 Tout Kripto (RI)
                     </button>
                     <button onClick={()=>{
                       const postesRE = postes.filter(p=>(p.nuisible||"Rongeurs")==="Rongeurs" && p.type==="RE");
                       setSaisies(prev=>{
                         const next = {...prev};
-                        postesRE.forEach(p=>{ next[p.id] = {...(next[p.id]||{}), molecule:"Placebo"}; });
+                        postesRE.forEach(p=>{ next[p.id] = {...(next[p.id]||{}), molecule:"Kripto"}; });
                         return next;
                       });
                     }} style={{background:"#1e40af22",color:"#1e40af",border:"1px solid #1e40af44",borderRadius:7,padding:"5px 12px",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
-                      🔵 Tout Placebo (RE)
+                      🔵 Tout Kripto (RE)
                     </button>
                     <span style={{fontSize:12,color:"#7a90aa"}}>{Object.keys(saisies).filter(k=>saisies[k]&&(saisies[k].etat||Object.keys(saisies[k]).some(f=>f.startsWith("cap_")||f.startsWith("iv_")))).length} saisis / {getPostesForType(form.type).length}</span>
                   </div>
