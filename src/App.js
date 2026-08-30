@@ -1566,7 +1566,10 @@ function Interventions({ reinterventions, setReinterventions, passagesGlobaux, s
                  : tab === "reinterventions" ? allEvents.filter(e => e._kind === "reinv" && !estReinvAuto(e))
                  : tab === "postconso"       ? allEvents.filter(e => e._kind === "reinv" &&  estReinvAuto(e))
                  : tab === "deiv"           ? allEvents.filter(e => e._kind === "passage" && e.type === "Insectes volants")
-                 : allEvents;
+                 // "Tout voir" : on N'AFFICHE PAS les contrôles post-conso en ligne autonome
+                 // (ils sont déjà listés sous leur passage parent, au clic) -> plus de doublon.
+                 // Ils restent accessibles à plat dans l'onglet dédié "Post-conso".
+                 : allEvents.filter(e => !(e._kind === "reinv" && estReinvAuto(e)));
 
   // Réinterventions "vraies" (sur anomalie) vs contrôles post-conso automatiques : deux catégories distinctes.
   const nbReinv     = allEvents.filter(e=>e._kind==="reinv" && !estReinvAuto(e)).length;
